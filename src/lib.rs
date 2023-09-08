@@ -2,6 +2,7 @@ mod cache;
 pub mod drop_base;
 pub mod models;
 mod sqlx_client;
+mod storage;
 
 use crate::cache::RawCache;
 use crate::models::{
@@ -12,6 +13,7 @@ use crate::sqlx_client::{
     get_count_raw_transactions, get_raw_transactions, insert_raw_transaction,
     insert_raw_transactions, update_raw_transactions_set_processed_true,
 };
+use crate::storage::{PersistentStorage, PersistentStorageConfig};
 use chrono::NaiveDateTime;
 use futures::channel::mpsc::{Receiver, Sender};
 use futures::SinkExt;
@@ -25,6 +27,7 @@ use tokio::sync::{Notify, RwLock};
 use tokio::time::sleep;
 use ton_block::{TrComputePhase, Transaction};
 use transaction_consumer::StreamFrom;
+use weedb::WeeDb;
 
 pub fn split_any_extractable(
     any_extractable: Vec<AnyExtractable>,
@@ -144,6 +147,24 @@ async fn timer(time: Arc<RwLock<i32>>) {
         *time.write().await += 1;
         sleep(Duration::from_secs(1)).await;
     }
+}
+
+pub fn create_rocksdb(path: &str) -> PersistentStorage {
+    let config = PersistentStorageConfig {
+        persistent_db_path: path.parse().expect("wrong rocksdb path"),
+        persistent_db_options: Default::default(),
+    };
+    
+    PersistentStorage::new(&config).expect("cant create rocksdb")
+}
+
+pub fn insert_raw_transaction_to_rocksdb(
+    transaction: Transaction,
+    db: &WeeDb,
+) -> Result<(), weedb::Error> {
+    let key = (transaction.now, transaction.lt);
+    let value = transaction;
+    db.put(key, value)
 }
 
 #[allow(clippy::too_many_arguments)]
