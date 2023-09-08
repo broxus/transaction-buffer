@@ -123,9 +123,9 @@ impl PersistentStorage {
         })
     }
 
-    pub fn insert_transactions(&self, transactions: &[Transaction]) {
-        for transaction in transactions {
-            self.insert_transaction(transaction);
+    pub fn insert_transactions_with_drain(&self, transactions: &mut Vec<Transaction>) {
+        for transaction in transactions.drain(..) {
+            self.insert_transaction(&transaction);
         }
     }
 

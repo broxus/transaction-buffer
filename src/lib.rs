@@ -225,8 +225,7 @@ async fn parse_kafka_transactions(
         }
 
         if count >= config.buff_size || *time.read().await >= config.commit_time_secs {
-            rocksdb.insert_transactions(&transactions);
-
+            rocksdb.insert_transactions_with_drain(&mut transactions);
             if let Err(e) = produced_transaction.commit() {
                 log::error!("cant commit kafka, stream is down. ERROR {}", e);
                 panic!("cant commit kafka, stream is down. ERROR {}", e)
@@ -243,7 +242,7 @@ async fn parse_kafka_transactions(
         }
     }
 
-    rocksdb.insert_transactions(&transactions);
+    rocksdb.insert_transactions_with_drain(&mut transactions);
 
     log::info!("kafka synced");
 
