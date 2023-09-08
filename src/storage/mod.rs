@@ -132,8 +132,8 @@ impl PersistentStorage {
     pub fn insert_transaction(&self, transaction: &Transaction) {
         let mut key_index = [0_u8; 12];
 
-        key_index[0..4].copy_from_slice(&transaction.now.to_le_bytes());
-        key_index[4..].copy_from_slice(&transaction.lt.to_le_bytes());
+        key_index[0..4].copy_from_slice(&transaction.now.to_be_bytes());
+        key_index[4..].copy_from_slice(&transaction.lt.to_be_bytes());
 
         if !self
             .transactions_index
@@ -144,8 +144,8 @@ impl PersistentStorage {
             let value = transaction.write_to_bytes().expect("trust me");
 
             key[0] = false as u8;
-            key[1..5].copy_from_slice(&transaction.now.to_le_bytes());
-            key[5..].copy_from_slice(&transaction.lt.to_le_bytes());
+            key[1..5].copy_from_slice(&transaction.now.to_be_bytes());
+            key[5..].copy_from_slice(&transaction.lt.to_be_bytes());
 
             let mut batch = WriteBatchWithTransaction::<false>::default();
 
@@ -164,8 +164,8 @@ impl PersistentStorage {
         let value = transaction.write_to_bytes().expect("trust me");
 
         key[0] = false as u8;
-        key[1..5].copy_from_slice(&transaction.now.to_le_bytes());
-        key[5..].copy_from_slice(&transaction.lt.to_le_bytes());
+        key[1..5].copy_from_slice(&transaction.now.to_be_bytes());
+        key[5..].copy_from_slice(&transaction.lt.to_be_bytes());
 
         let mut batch = WriteBatchWithTransaction::<false>::default();
         batch.delete_cf(&self.transactions.cf(), key);
@@ -214,7 +214,7 @@ impl PersistentStorage {
 
     pub fn check_drop_base_index(&self, index: u32) -> bool {
         let mut key = [0_u8; 4];
-        key.copy_from_slice(&index.to_le_bytes());
+        key.copy_from_slice(&index.to_be_bytes());
 
         match self
             .drop_base_index

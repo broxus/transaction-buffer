@@ -323,7 +323,9 @@ async fn parse_raw_transaction(
         .await
         .expect("dead sender");
 
-        log::info!("parsing {}/{}", i, count_not_processed);
+        if i % 10_000 {
+            log::info!("parsing {}/{}", i, count_not_processed);
+        }
     }
 
     notify.notify_one();
