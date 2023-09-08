@@ -5,29 +5,21 @@ mod sqlx_client;
 mod storage;
 
 use crate::cache::RawCache;
-use crate::models::{
-    AnyExtractable, BufferedConsumerChannels, BufferedConsumerConfig, RawTransaction,
-};
-use crate::sqlx_client::{
-    create_table_raw_transactions, get_count_not_processed_raw_transactions,
-    get_count_raw_transactions, get_raw_transactions, insert_raw_transaction,
-    insert_raw_transactions, update_raw_transactions_set_processed_true,
-};
+use crate::models::{AnyExtractable, BufferedConsumerChannels, BufferedConsumerConfig};
 use crate::storage::{PersistentStorage, PersistentStorageConfig};
 use chrono::NaiveDateTime;
 use futures::channel::mpsc::{Receiver, Sender};
 use futures::SinkExt;
 use futures::StreamExt;
+use itertools::Itertools;
 use nekoton_abi::transaction_parser::{Extracted, ExtractedOwned, ParsedType};
 use nekoton_abi::TransactionParser;
-use sqlx::PgPool;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Notify, RwLock};
 use tokio::time::sleep;
 use ton_block::{TrComputePhase, Transaction};
 use transaction_consumer::StreamFrom;
-use weedb::WeeDb;
 
 pub fn split_any_extractable(
     any_extractable: Vec<AnyExtractable>,
@@ -94,6 +86,7 @@ pub fn start_parsing_and_get_channels(config: BufferedConsumerConfig) -> Buffere
             rx_commit,
         ));
     }
+
     BufferedConsumerChannels {
         rx_parsed_events,
         tx_commit,
@@ -102,9 +95,10 @@ pub fn start_parsing_and_get_channels(config: BufferedConsumerConfig) -> Buffere
 }
 
 pub fn test_from_raw_transactions(
-    pg_pool: PgPool,
+    rocksdb_path: &str,
     any_extractable: Vec<AnyExtractable>,
 ) -> BufferedConsumerChannels {
+    let rocksdb = Arc::new(create_rocksdb(rocksdb_path));
     let (tx_parsed_events, rx_parsed_events) = futures::channel::mpsc::channel(1);
     let (tx_commit, rx_commit) = futures::channel::mpsc::channel(1);
     let notify_for_services = Arc::new(Notify::new());
@@ -124,17 +118,23 @@ pub fn test_from_raw_transactions(
         let time = time.clone();
         tokio::spawn(timer(time));
     }
+
+    {
+        let rocksdb = rocksdb.clone();
+        tokio::spawn(commit_transactions(rx_commit, rocksdb));
+    }
+
     tokio::spawn(parse_raw_transaction(
         parser,
         tx_parsed_events,
         notify_for_services.clone(),
-        pg_pool,
-        rx_commit,
         RawCache::new(),
         timestamp_last_block,
         time,
         2,
+        rocksdb,
     ));
+
     BufferedConsumerChannels {
         rx_parsed_events,
         tx_commit,
@@ -154,27 +154,37 @@ pub fn create_rocksdb(path: &str) -> PersistentStorage {
         persistent_db_path: path.parse().expect("wrong rocksdb path"),
         persistent_db_options: Default::default(),
     };
-    
+
     PersistentStorage::new(&config).expect("cant create rocksdb")
 }
 
-pub fn insert_raw_transaction_to_rocksdb(
-    transaction: Transaction,
-    db: &WeeDb,
-) -> Result<(), weedb::Error> {
-    let key = (transaction.now, transaction.lt);
-    let value = transaction;
-    db.put(key, value)
+async fn commit_transactions(
+    mut commit_rx: Receiver<Vec<Transaction>>,
+    rocksdb: Arc<PersistentStorage>,
+) {
+    while let Some(transactions) = commit_rx.next().await {
+        for transaction in transactions {
+            rocksdb.update_transaction_processed(transaction)
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn parse_kafka_transactions(
     config: BufferedConsumerConfig,
-    tx_parsed_events: Sender<Vec<(Vec<ExtractedOwned>, RawTransaction)>>,
+    tx_parsed_events: Sender<Vec<(Vec<ExtractedOwned>, Transaction)>>,
     notify_for_services: Arc<Notify>,
-    commit_rx: Receiver<()>,
+    commit_rx: Receiver<Vec<Transaction>>,
 ) {
-    create_table_raw_transactions(&config.pg_pool).await;
+    let rocksdb = Arc::new(create_rocksdb(&config.rocksdb_path));
+    let raw_cache = RawCache::new();
+    let time = Arc::new(RwLock::new(0));
+
+    {
+        let rocksdb = rocksdb.clone();
+        tokio::spawn(commit_transactions(commit_rx, rocksdb));
+    }
+
     let (functions, events) = split_any_extractable(config.any_extractable.clone());
 
     let parser = TransactionParser::builder()
@@ -184,17 +194,14 @@ async fn parse_kafka_transactions(
         .build()
         .unwrap();
 
-    let raw_cache = RawCache::new();
-
-    let time = Arc::new(RwLock::new(0));
     {
         let time = time.clone();
         tokio::spawn(timer(time));
     }
 
-    let stream_from = match get_count_raw_transactions(&config.pg_pool).await == 0 {
-        true => StreamFrom::Beginning,
-        false => StreamFrom::Stored,
+    let stream_from = match rocksdb.check_drop_base_index(config.rocksdb_drop_base_index) {
+        false => StreamFrom::Beginning,
+        true => StreamFrom::Stored,
     };
 
     let (mut stream_transactions, offsets) = config
@@ -206,7 +213,7 @@ async fn parse_kafka_transactions(
     let timestamp_last_block = Arc::new(RwLock::new(0_i32));
 
     let mut count = 0;
-    let mut raw_transactions = vec![];
+    let mut transactions = vec![];
     while let Some(produced_transaction) = stream_transactions.next().await {
         count += 1;
         let transaction: Transaction = produced_transaction.transaction.clone();
@@ -214,18 +221,15 @@ async fn parse_kafka_transactions(
         *timestamp_last_block.write().await = transaction_time as i32;
 
         if buff_extracted_events(&transaction, &parser).is_some() {
-            raw_transactions.push(transaction.into());
+            transactions.push(transaction);
         }
 
         if count >= config.buff_size || *time.read().await >= config.commit_time_secs {
-            if !raw_transactions.is_empty() {
-                insert_raw_transactions(&mut raw_transactions, &config.pg_pool)
-                    .await
-                    .expect("cant insert raw_transactions: rip db");
-            }
+            rocksdb.insert_transactions(&transactions);
 
             if let Err(e) = produced_transaction.commit() {
                 log::error!("cant commit kafka, stream is down. ERROR {}", e);
+                panic!("cant commit kafka, stream is down. ERROR {}", e)
             }
 
             log::info!(
@@ -239,50 +243,44 @@ async fn parse_kafka_transactions(
         }
     }
 
-    if !raw_transactions.is_empty() {
-        insert_raw_transactions(&mut raw_transactions, &config.pg_pool)
-            .await
-            .expect("cant insert raw_transaction: rip db");
-    }
+    rocksdb.insert_transactions(&transactions);
 
     log::info!("kafka synced");
 
     {
-        let pg_pool = config.pg_pool.clone();
         let parser = parser.clone();
         let raw_cache = raw_cache.clone();
         let timestamp_last_block = timestamp_last_block.clone();
         let timer = time.clone();
+        let rocksdb = rocksdb.clone();
+
         tokio::spawn(parse_raw_transaction(
             parser,
             tx_parsed_events,
             notify_for_services,
-            pg_pool,
-            commit_rx,
             raw_cache,
             timestamp_last_block,
             timer,
             config.cache_timer,
+            rocksdb,
         ));
     }
 
-    let mut i = 0;
     let mut stream_transactions = config
         .transaction_consumer
         .stream_transactions(StreamFrom::Offsets(offsets))
         .await
         .expect("cant get stream transactions");
 
+    let mut i = 0;
     while let Some(produced_transaction) = stream_transactions.next().await {
         i += 1;
         let transaction: Transaction = produced_transaction.transaction.clone();
         let transaction_timestamp = transaction.now;
 
         if buff_extracted_events(&transaction, &parser).is_some() {
-            insert_raw_transaction(transaction.clone().into(), &config.pg_pool)
-                .await
-                .expect("cant insert raw_transaction to db");
-            raw_cache.insert_raw(transaction.into()).await;
+            rocksdb.insert_transaction(&transaction);
+            raw_cache.insert_raw(transaction).await;
         }
 
         *timestamp_last_block.write().await = transaction_timestamp as i32;
@@ -304,91 +302,56 @@ async fn parse_kafka_transactions(
 #[allow(clippy::too_many_arguments)]
 async fn parse_raw_transaction(
     parser: TransactionParser,
-    mut tx: Sender<Vec<(Vec<ExtractedOwned>, RawTransaction)>>,
+    mut tx: Sender<Vec<(Vec<ExtractedOwned>, Transaction)>>,
     notify: Arc<Notify>,
-    pg_pool: PgPool,
-    mut commit_rx: Receiver<()>,
     raw_cache: RawCache,
     timestamp_last_block: Arc<RwLock<i32>>,
     timer: Arc<RwLock<i32>>,
     cache_timer: i32,
+    rocksdb: Arc<PersistentStorage>,
 ) {
-    let count_not_processed = get_count_not_processed_raw_transactions(&pg_pool).await;
+    let count_not_processed = rocksdb.count_not_processed_transactions();
+    let transactions_iter = rocksdb.iterate_unprocessed_transactions();
+
     let mut i: i64 = 0;
+    for transaction in transactions_iter {
+        i += 1;
 
-    loop {
-        let mut begin = pg_pool.begin().await.expect("cant get pg transaction");
+        tx.send(vec![(
+            buff_extracted_events(&transaction, &parser).unwrap_or_default(),
+            transaction,
+        )])
+        .await
+        .expect("dead sender");
 
-        let raw_transactions_from_db =
-            get_raw_transactions(1000, *timestamp_last_block.read().await, &mut begin)
-                .await
-                .unwrap_or_default();
-
-        if raw_transactions_from_db.is_empty() {
-            notify.notify_one();
-            break;
-        }
-
-        let mut send_message = vec![];
-        for raw_transaction_from_db in raw_transactions_from_db {
-            i += 1;
-
-            let raw_transaction = match RawTransaction::try_from(raw_transaction_from_db) {
-                Ok(ok) => ok,
-                Err(e) => {
-                    log::error!("{}", e);
-                    continue;
-                }
-            };
-
-            if let Some(events) = buff_extracted_events(&raw_transaction.data, &parser) {
-                send_message.push((events, raw_transaction));
-            };
-        }
-        if !send_message.is_empty() {
-            tx.send(send_message).await.expect("dead sender");
-            commit_rx.next().await;
-        }
-        begin.commit().await.expect("cant commit db update");
-
-        if i >= count_not_processed {
-            log::info!("end parse. synced");
-            notify.notify_one();
-            break;
-        } else {
-            log::info!("parsing {}/{}", i, count_not_processed);
-        }
+        log::info!("parsing {}/{}", i, count_not_processed);
     }
 
-    raw_cache.fill_raws(&pg_pool).await;
+    notify.notify_one();
+
+    raw_cache.fill_raws(&rocksdb).await;
 
     loop {
-        let (raw_transactions, times) = raw_cache
-            .get_raws(
-                *timestamp_last_block.read().await,
-                timer.clone(),
-                cache_timer,
-            )
+        let transactions = raw_cache
+            .get_raws(*timestamp_last_block.read().await, &timer, cache_timer)
             .await;
 
-        if raw_transactions.is_empty() {
+        if transactions.is_empty() {
             sleep(Duration::from_secs(1)).await;
             continue;
         }
 
-        let mut send_message = vec![];
-        for raw_transaction in raw_transactions {
-            if let Some(events) = buff_extracted_events(&raw_transaction.data, &parser) {
-                send_message.push((events, raw_transaction));
-            };
-        }
+        let send_message = transactions
+            .into_iter()
+            .map(|transaction| {
+                (
+                    buff_extracted_events(&transaction, &parser).unwrap_or_default(),
+                    transaction,
+                )
+            })
+            .collect_vec();
 
-        if !send_message.is_empty() {
-            tx.send(send_message).await.expect("dead sender");
-            commit_rx.next().await;
-        }
-
-        update_raw_transactions_set_processed_true(&pg_pool, times).await;
+        tx.send(send_message).await.expect("dead sender");
     }
 }
 
@@ -396,13 +359,6 @@ pub fn extract_events(
     data: &Transaction,
     parser: &TransactionParser,
 ) -> Option<Vec<ExtractedOwned>> {
-    // let parser = TransactionParser::builder()
-    //     .function_in_list(functions.clone(), false)
-    //     .functions_out_list(functions, false)
-    //     .events_list(events)
-    //     .build()
-    //     .unwrap();
-
     if let Ok(extracted) = parser.parse(data) {
         if !extracted.is_empty() {
             return filter_extracted(extracted, data.clone());

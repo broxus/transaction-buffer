@@ -1,107 +1,12 @@
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::Instant;
-
-use crate::storage::tables::Transactions;
 use anyhow::{Context, Result};
-use tokio::sync::watch;
-use ton_block::{Deserializable, HashmapAugType, Serializable, Transaction};
-use ton_types::{HashmapType, UInt256};
+use std::path::PathBuf;
+use ton_block::{Deserializable, Serializable, Transaction};
 use weedb::rocksdb::{IteratorMode, WriteBatchWithTransaction};
 use weedb::{rocksdb, Caches, Migrations, Semver, Table, WeeDb};
 
 pub mod tables;
 
-pub struct RuntimeStorage {
-    key_block: watch::Sender<Option<ton_block::Block>>,
-    masterchain_accounts_cache: RwLock<Option<ShardAccounts>>,
-    shard_accounts_cache: RwLock<FxHashMap<ton_block::ShardIdent, ShardAccounts>>,
-}
-
-impl Default for RuntimeStorage {
-    fn default() -> Self {
-        let (key_block, _) = watch::channel(None);
-        Self {
-            key_block,
-            masterchain_accounts_cache: Default::default(),
-            shard_accounts_cache: Default::default(),
-        }
-    }
-}
-
-impl RuntimeStorage {
-    pub fn subscribe_to_key_blocks(&self) -> watch::Receiver<Option<ton_block::Block>> {
-        self.key_block.subscribe()
-    }
-
-    pub fn update_key_block(&self, block: &ton_block::Block) {
-        self.key_block.send_replace(Some(block.clone()));
-    }
-
-    pub fn update_contract_states(
-        &self,
-        block_id: &ton_block::BlockIdExt,
-        block_info: &ton_block::BlockInfo,
-        shard_state: &ShardStateStuff,
-    ) -> Result<()> {
-        let accounts = shard_state.state().read_accounts()?;
-        let state_handle = shard_state.ref_mc_state_handle().clone();
-
-        let shard_accounts = ShardAccounts {
-            accounts,
-            state_handle,
-            gen_utime: block_info.gen_utime().as_u32(),
-        };
-
-        if block_id.shard_id.is_masterchain() {
-            *self.masterchain_accounts_cache.write() = Some(shard_accounts);
-        } else {
-            let mut cache = self.shard_accounts_cache.write();
-
-            cache.insert(*block_info.shard(), shard_accounts);
-            if block_info.after_merge() || block_info.after_split() {
-                tracing::debug!("Clearing shard states cache after shards merge/split");
-
-                let block_ids = block_info.read_prev_ids()?;
-                match block_ids.len() {
-                    // Block after split
-                    //       |
-                    //       *  - block A
-                    //      / \
-                    //     *   *  - blocks B', B"
-                    1 => {
-                        // Find all split shards for the block A
-                        let (left, right) = block_ids[0].shard_id.split()?;
-
-                        // Remove parent shard of the block A
-                        if cache.contains_key(&left) && cache.contains_key(&right) {
-                            cache.remove(&block_ids[0].shard_id);
-                        }
-                    }
-
-                    // Block after merge
-                    //     *   *  - blocks A', A"
-                    //      \ /
-                    //       *  - block B
-                    //       |
-                    2 => {
-                        // Find and remove all parent shards
-                        for block_id in block_info.read_prev_ids()? {
-                            cache.remove(&block_id.shard_id);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, default)]
+#[derive(Debug, Clone)]
 pub struct DbOptions {
     pub max_memory_usage: usize,
     pub min_caches_capacity: usize,
@@ -121,14 +26,13 @@ impl Default for DbOptions {
 pub struct PersistentStorage {
     pub transactions: Table<tables::Transactions>,
     pub transactions_index: Table<tables::TransactionsIndex>,
+    pub drop_base_index: Table<tables::DropBaseIndex>,
     pub inner: WeeDb,
 }
 
 #[derive(Debug, Clone)]
-#[serde(deny_unknown_fields)]
 pub struct PersistentStorageConfig {
     pub persistent_db_path: PathBuf,
-    #[serde(default)]
     pub persistent_db_options: DbOptions,
 }
 
@@ -178,10 +82,17 @@ impl PersistentStorage {
 
                 // cpu
                 opts.set_max_background_jobs(std::cmp::max(
-                    (std::thread::available_parallelism() as i32) / 2,
+                    (std::thread::available_parallelism()
+                        .expect("cant get available_parallelism")
+                        .get() as i32)
+                        / 2,
                     2,
                 ));
-                opts.increase_parallelism(std::thread::available_parallelism() as i32);
+                opts.increase_parallelism(
+                    std::thread::available_parallelism()
+                        .expect("cant get available_parallelism")
+                        .get() as i32 as i32,
+                );
 
                 opts.optimize_level_style_compaction(compaction_memory_budget);
 
@@ -191,6 +102,7 @@ impl PersistentStorage {
             })
             .with_table::<tables::Transactions>()
             .with_table::<tables::TransactionsIndex>()
+            .with_table::<tables::DropBaseIndex>()
             .build()
             .context("Failed building db")?;
 
@@ -201,15 +113,23 @@ impl PersistentStorage {
 
         let transactions: Table<tables::Transactions> = inner.instantiate_table();
         let transactions_index: Table<tables::TransactionsIndex> = inner.instantiate_table();
+        let drop_base_index: Table<tables::DropBaseIndex> = inner.instantiate_table();
 
         Ok(Self {
             transactions,
             transactions_index,
+            drop_base_index,
             inner,
         })
     }
 
-    pub fn insert(&self, transaction: &Transaction) {
+    pub fn insert_transactions(&self, transactions: &[Transaction]) {
+        for transaction in transactions {
+            self.insert_transaction(transaction);
+        }
+    }
+
+    pub fn insert_transaction(&self, transaction: &Transaction) {
         let mut key_index = [0_u8; 12];
 
         key_index[0..4].copy_from_slice(&transaction.now.to_le_bytes());
@@ -217,7 +137,7 @@ impl PersistentStorage {
 
         if !self
             .transactions_index
-            .contains_key(&key_index)
+            .contains_key(key_index)
             .expect("cant check transaction_index: rocksdb is dead")
         {
             let mut key = [0_u8; 13];
@@ -229,8 +149,8 @@ impl PersistentStorage {
 
             let mut batch = WriteBatchWithTransaction::<false>::default();
 
-            batch.put_cf(&self.transactions.cf(), &key, &value);
-            batch.put_cf(&self.transactions_index.cf(), &key_index, &[]);
+            batch.put_cf(&self.transactions.cf(), key, value);
+            batch.put_cf(&self.transactions_index.cf(), key_index, []);
 
             self.inner
                 .raw()
@@ -248,10 +168,10 @@ impl PersistentStorage {
         key[5..].copy_from_slice(&transaction.lt.to_le_bytes());
 
         let mut batch = WriteBatchWithTransaction::<false>::default();
-        batch.delete_cf(&self.transactions.cf(), &key);
+        batch.delete_cf(&self.transactions.cf(), key);
 
         key[0] = true as u8;
-        batch.put_cf(&self.transactions.cf(), &key, &value);
+        batch.put_cf(&self.transactions.cf(), key, value);
 
         self.inner
             .raw()
@@ -259,7 +179,7 @@ impl PersistentStorage {
             .expect("cant update transaction: rocksdb is dead");
     }
 
-    pub fn iterate_unprocessed_transactions(&self) -> impl Iterator<Item = Transaction> {
+    pub fn iterate_unprocessed_transactions(&self) -> impl Iterator<Item = Transaction> + '_ {
         let mut key = [0_u8; 13];
         key[0] = false as u8;
 
@@ -272,6 +192,64 @@ impl PersistentStorage {
                 }
                 Some(Transaction::construct_from_bytes(&value).expect("trust me"))
             })
+            .fuse()
+    }
+
+    pub fn count_not_processed_transactions(&self) -> usize {
+        let mut key = [0_u8; 13];
+        key[0] = false as u8;
+
+        self.transactions
+            .iterator(IteratorMode::From(&key, rocksdb::Direction::Forward))
+            .filter_map(|key| {
+                let (key, _) = key.ok()?;
+                if key[0] != false as u8 {
+                    return None;
+                }
+                Some(())
+            })
+            .fuse()
+            .count()
+    }
+
+    pub fn check_drop_base_index(&self, index: u32) -> bool {
+        let mut key = [0_u8; 4];
+        key.copy_from_slice(&index.to_le_bytes());
+
+        match self
+            .drop_base_index
+            .contains_key(key)
+            .expect("cant check transaction_index: rocksdb is dead")
+        {
+            true => true,
+            false => {
+                let mut batch = WriteBatchWithTransaction::<false>::default();
+
+                batch.delete_range_cf(
+                    &self.transactions.cf(),
+                    [0_u8; 4 + 8 + 1],
+                    [u8::MAX; 4 + 8 + 1],
+                );
+                batch.delete_range_cf(&self.drop_base_index.cf(), [0_u8; 4], [u8::MAX; 4]);
+                batch.delete_range_cf(
+                    &self.transactions_index.cf(),
+                    [0_u8; 4 + 8],
+                    [u8::MAX; 4 + 8],
+                );
+
+                self.inner
+                    .raw()
+                    .write(batch)
+                    .expect("cant delete range: rocksdb is dead");
+
+                self.inner
+                    .raw()
+                    .put_cf(&self.drop_base_index.cf(), key, [])
+                    .expect("cant put drop_base_index: rocksdb is dead");
+
+                false
+            }
+        }
     }
 }
 

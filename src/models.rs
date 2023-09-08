@@ -1,21 +1,18 @@
-use anyhow::Context;
 use futures::channel::mpsc::{Receiver, Sender};
 use nekoton_abi::transaction_parser::ExtractedOwned;
-use sqlx::postgres::PgRow;
-use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use tokio::sync::Notify;
-use ton_block::{Deserializable, GetRepresentationHash, Serializable, Transaction};
-use ton_types::UInt256;
+use ton_block::Transaction;
 use transaction_consumer::TransactionConsumer;
 
 pub struct BufferedConsumerConfig {
     pub transaction_consumer: Arc<TransactionConsumer>,
-    pub pg_pool: PgPool,
     pub any_extractable: Vec<AnyExtractable>,
     pub buff_size: i64,
     pub commit_time_secs: i32,
     pub cache_timer: i32,
+    pub rocksdb_path: String,
+    pub rocksdb_drop_base_index: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -27,91 +24,27 @@ pub enum AnyExtractable {
 impl BufferedConsumerConfig {
     pub fn new(
         transaction_consumer: Arc<TransactionConsumer>,
-        pg_pool: PgPool,
         any_extractable: Vec<AnyExtractable>,
         buff_size: i64,
         commit_time_secs: i32,
         cache_timer: i32,
+        rocksdb_path: String,
+        rocksdb_drop_base_index: u32,
     ) -> Self {
         Self {
             transaction_consumer,
-            pg_pool,
             any_extractable,
             buff_size,
             commit_time_secs,
             cache_timer,
+            rocksdb_path,
+            rocksdb_drop_base_index,
         }
     }
 }
 
 pub struct BufferedConsumerChannels {
-    pub rx_parsed_events: Receiver<Vec<(Vec<ExtractedOwned>, RawTransaction)>>,
-    pub tx_commit: Sender<()>,
+    pub rx_parsed_events: Receiver<Vec<(Vec<ExtractedOwned>, Transaction)>>,
+    pub tx_commit: Sender<Vec<Transaction>>,
     pub notify_for_services: Arc<Notify>,
-}
-
-#[derive(Debug, Clone)]
-pub struct RawTransactionFromDb {
-    pub transaction: Vec<u8>,
-    pub transaction_hash: Vec<u8>,
-    pub timestamp_block: i32,
-    pub timestamp_lt: i64,
-    pub created_at: i64,
-    pub processed: bool,
-}
-
-impl From<PgRow> for RawTransactionFromDb {
-    fn from(x: PgRow) -> Self {
-        RawTransactionFromDb {
-            transaction: x.get(0),
-            transaction_hash: x.get(1),
-            timestamp_block: x.get(2),
-            timestamp_lt: x.get(3),
-            created_at: x.get(4),
-            processed: x.get(5),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct RawTransaction {
-    pub hash: UInt256,
-    pub data: Transaction,
-}
-
-impl From<RawTransactionFromDb> for RawTransaction {
-    fn from(value: RawTransactionFromDb) -> Self {
-        let transaction =
-            ton_block::Transaction::construct_from_bytes(value.transaction.as_slice()).unwrap();
-
-        RawTransaction {
-            hash: UInt256::from_be_bytes(&value.transaction_hash),
-            data: transaction,
-        }
-    }
-}
-
-impl From<Transaction> for RawTransactionFromDb {
-    fn from(x: Transaction) -> Self {
-        RawTransactionFromDb {
-            transaction: x
-                .write_to_bytes()
-                .context("Failed serializing tx to bytes")
-                .unwrap(),
-            transaction_hash: x.hash().unwrap().as_slice().to_vec(),
-            timestamp_block: x.now as i32,
-            timestamp_lt: x.lt as i64,
-            created_at: 0,
-            processed: false,
-        }
-    }
-}
-
-impl From<Transaction> for RawTransaction {
-    fn from(x: Transaction) -> Self {
-        RawTransaction {
-            hash: x.hash().unwrap(),
-            data: x,
-        }
-    }
 }

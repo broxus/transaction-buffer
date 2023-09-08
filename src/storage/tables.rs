@@ -31,6 +31,20 @@ impl ColumnFamily for TransactionsIndex {
     }
 }
 
+pub struct DropBaseIndex;
+
+impl DropBaseIndex {
+    pub const KEY_LEN: usize = 4;
+}
+
+impl ColumnFamily for DropBaseIndex {
+    const NAME: &'static str = "drop_base_index";
+
+    fn options(opts: &mut Options, caches: &Caches) {
+        default_block_based_table_factory(opts, caches);
+    }
+}
+
 fn default_block_based_table_factory(opts: &mut Options, caches: &Caches) {
     let mut block_factory = BlockBasedOptions::default();
     block_factory.set_block_cache(&caches.block_cache);
