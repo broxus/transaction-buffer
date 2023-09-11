@@ -1,6 +1,6 @@
 /target/
 /Cargo.lock
-
+./raw_transactions
 .idea/
 
 src/abi/

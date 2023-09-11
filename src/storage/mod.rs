@@ -124,7 +124,7 @@ impl PersistentStorage {
     }
 
     pub fn insert_transactions_with_drain(&self, transactions: &mut Vec<Transaction>) {
-        for transaction in transactions.drain(..) {
+        while let Some(transaction) = transactions.pop() {
             self.insert_transaction(&transaction);
         }
     }
