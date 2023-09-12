@@ -310,21 +310,23 @@ async fn parse_raw_transaction(
     rocksdb: Arc<PersistentStorage>,
 ) {
     let count_not_processed = rocksdb.count_not_processed_transactions();
-    let transactions_iter = rocksdb.iterate_unprocessed_transactions();
+    {
+        let transactions_iter = rocksdb.iterate_unprocessed_transactions();
 
-    let mut i: i64 = 0;
-    for transaction in transactions_iter {
-        i += 1;
+        let mut i: i64 = 0;
+        for transaction in transactions_iter {
+            i += 1;
 
-        tx.send(vec![(
-            buff_extracted_events(&transaction, &parser).unwrap_or_default(),
-            transaction,
-        )])
-        .await
-        .expect("dead sender");
+            tx.send(vec![(
+                buff_extracted_events(&transaction, &parser).unwrap_or_default(),
+                transaction,
+            )])
+                .await
+                .expect("dead sender");
 
-        if i % 10_000 == 0 {
-            log::info!("parsing {}/{}", i, count_not_processed);
+            if i % 10_000 == 0 {
+                log::info!("parsing {}/{}", i, count_not_processed);
+            }
         }
     }
 
