@@ -253,6 +253,7 @@ impl RocksdbClient {
         {
             true => {
                 if self.constants.postgres_base_is_dropped {
+                    log::info!("postgres db is dropped, update processed transactions to unprocessed, from_timestamp: {}", self.constants.from_timestamp);
                     self.update_processed_transactions_to_unprocessed(
                         self.constants.from_timestamp,
                     );
@@ -260,6 +261,7 @@ impl RocksdbClient {
                 StreamFrom::Stored
             }
             false => {
+                log::info!("drop rocksdb all transactions");
                 let mut batch = WriteBatchWithTransaction::<false>::default();
 
                 batch.delete_range_cf(
