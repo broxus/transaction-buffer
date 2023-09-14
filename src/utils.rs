@@ -1,4 +1,4 @@
-use crate::models::AnyExtractable;
+use crate::models::{AnyExtractable, BufferedConsumerConfig, RocksdbClientConstants};
 use nekoton_abi::transaction_parser::{Extracted, ExtractedOwned, ParsedType};
 use nekoton_abi::TransactionParser;
 use std::sync::Arc;
@@ -123,10 +123,11 @@ pub fn filter_extracted(
     Some(extracted.into_iter().map(|x| x.into_owned()).collect())
 }
 
-pub fn create_rocksdb(path: &str) -> RocksdbClient {
+pub fn create_rocksdb(rocksdb_path: &str, constants: RocksdbClientConstants) -> RocksdbClient {
     let config = RocksdbClientConfig {
-        persistent_db_path: path.parse().expect("wrong rocksdb path"),
+        persistent_db_path: rocksdb_path.parse().expect("wrong rocksdb path"),
         persistent_db_options: Default::default(),
+        constants,
     };
 
     RocksdbClient::new(&config).expect("cant create rocksdb")

@@ -2,8 +2,8 @@ mod cache;
 mod context;
 pub mod drop_base;
 pub mod models;
-mod sqlx_client;
 mod rocksdb_client;
+mod sqlx_client;
 pub mod util_for_local_tests;
 pub mod utils;
 
@@ -65,7 +65,9 @@ async fn parse_kafka_transactions(
         tokio::spawn(timer(context));
     }
 
-    let offsets = sync_kafka(&context).await;
+    let stream_from = context.rocksdb.check_drop_base_index();
+
+    let offsets = sync_kafka(&context, stream_from).await;
     log::info!("kafka synced");
 
     {
@@ -76,15 +78,7 @@ async fn parse_kafka_transactions(
     realtime_processing_kafka(&context, offsets).await;
 }
 
-async fn sync_kafka(context: &BufferContext) -> Offsets {
-    let stream_from = match context
-        .rocksdb
-        .check_drop_base_index(context.config.rocksdb_drop_base_index)
-    {
-        false => StreamFrom::Beginning,
-        true => StreamFrom::Stored,
-    };
-
+async fn sync_kafka(context: &BufferContext, stream_from: StreamFrom) -> Offsets {
     let (mut stream_transactions, offsets) = context
         .config
         .transaction_consumer
@@ -195,6 +189,7 @@ async fn parse_transaction(
     }
 
     context.notify_for_services.notify_one();
+    log::info!("services notified");
 
     context.raw_cache.fill_raws(&context.rocksdb).await;
 
@@ -240,11 +235,13 @@ async fn commit_transactions(
 
 #[cfg(test)]
 mod test {
+    use crate::models::RocksdbClientConstants;
+    use crate::rocksdb_client::RocksdbClient;
     use crate::utils::create_rocksdb;
     use chrono::Utc;
     use nekoton_abi::TransactionParser;
     use std::sync::Arc;
-    use ton_block::{Deserializable, GetRepresentationHash};
+    use ton_block::{Deserializable, GetRepresentationHash, Transaction};
 
     // #[test]
     // fn test_empty() {
@@ -265,8 +262,7 @@ mod test {
     //     dbg!(test1);
     // }
 
-    #[tokio::test]
-    async fn local_test() {
+    fn get_test_transactions() -> Vec<Transaction> {
         let mut transactions = vec![];
         let tx_1633727461_19509853000001 = "te6ccgECCQEAAg4AA7d3cnyhOFnuOBiS7moENRZdNgUxiJAFUM2wK5Pqa8gcB1AAARvn3bkUEHE2RFMaxmGCqXux36pcE9N7+Jg1kxeQWe/n44lh2HYwAAEb59cMGBYWCz5QADSANoeJaAUEAQIZBGDJDe1mMBiANJ8xEQMCAG/Jh6EgTD0JAAAAAAAAAgAAAAAAAwu+Ss8rtVvUqnu/kPfiN6aoISSENKFpCmpLlo4NR6C8QFAX5ACeTXisOQvgAAAAAAAAAAGXAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACCcshMEB1nTna+yJhfgnCtml3/fBkOUWgyUrx2xSrVL5ND2vdSOtvkOTEsSD5Rzec6Y8UePq9NoMVb2Hav+QBB4KACAeAIBgEB3wcAv+ADuT5QnCz3HAxJdzUCGosumwKYxEgCqGbYFcn1NeQOA6gAACN8+7cihMLBZ8oWNmsvgAAAAbCwWfKwsatywALZYvCjWYzeGLgWFLOIJcpGujmwK7+Or1U9tc+JQK2cCADBaABbLF4UazGbwxcCwpZxBLlI10c2BXfx1eqntrnxKBWzgQAdyfKE4We44GJLuagQ1Fl02BTGIkAVQzbArk+pryBwHVDe1mMABhRYYAAAI3z7W5UEwsFnuDE93M+AAAABwA==";
         let tx =
@@ -328,10 +324,24 @@ mod test {
             ton_block::Transaction::construct_from_base64(&tx_1633727491_19509866000001).unwrap();
         transactions.push(tx);
 
-        let rocksdb = Arc::new(create_rocksdb("./raw_transactions"));
+        transactions
+    }
+
+    #[tokio::test]
+    async fn local_test() {
+        let mut transactions = get_test_transactions();
+
+        let rocksdb = Arc::new(create_rocksdb(
+            "./raw_transactions",
+            RocksdbClientConstants {
+                drop_base_index: 0,
+                from_timestamp: 0,
+                postgres_base_is_dropped: false,
+            },
+        ));
 
         let index = Utc::now().timestamp() as u32;
-        rocksdb.check_drop_base_index(index);
+        rocksdb.check_drop_base_index();
 
         rocksdb.insert_transactions_with_drain(&mut transactions);
 
@@ -375,6 +385,47 @@ mod test {
         }
 
         println!("sorted and empty");
+
+        drop(rocksdb);
+        std::fs::remove_dir_all("./raw_transactions").unwrap();
+    }
+
+    #[test]
+    fn test_update_transactions() {
+        let mut transactions = get_test_transactions();
+        let from_timestamp = 1633727484;
+        let rocksdb = Arc::new(create_rocksdb(
+            "./raw_transactions",
+            RocksdbClientConstants {
+                drop_base_index: 0,
+                from_timestamp,
+                postgres_base_is_dropped: true,
+            },
+        ));
+
+        rocksdb.check_drop_base_index();
+        rocksdb.insert_transactions_with_drain(&mut transactions);
+
+        {
+            let iter = rocksdb.iterate_unprocessed_transactions();
+
+            for transaction in iter {
+                rocksdb.update_transaction_processed(transaction);
+            }
+        }
+
+        rocksdb.check_drop_base_index();
+
+        {
+            let iter = rocksdb.iterate_unprocessed_transactions();
+
+            for transaction in iter {
+                println!("now {}, lt {}", transaction.now, transaction.lt);
+                if transaction.now < from_timestamp {
+                    panic!("old transaction {}", transaction.now);
+                }
+            }
+        }
 
         drop(rocksdb);
         std::fs::remove_dir_all("./raw_transactions").unwrap();

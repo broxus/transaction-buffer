@@ -1,6 +1,8 @@
+use crate::models::RocksdbClientConstants;
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 use ton_block::{Deserializable, Serializable, Transaction};
+use transaction_consumer::StreamFrom;
 use weedb::rocksdb::{IteratorMode, WriteBatchWithTransaction};
 use weedb::{rocksdb, Caches, Migrations, Semver, Table, WeeDb};
 
@@ -28,12 +30,14 @@ pub struct RocksdbClient {
     pub transactions_index: Table<tables::TransactionsIndex>,
     pub drop_base_index: Table<tables::DropBaseIndex>,
     pub inner: WeeDb,
+    pub constants: RocksdbClientConstants,
 }
 
 #[derive(Debug, Clone)]
 pub struct RocksdbClientConfig {
     pub persistent_db_path: PathBuf,
     pub persistent_db_options: DbOptions,
+    pub constants: RocksdbClientConstants,
 }
 
 impl RocksdbClient {
@@ -120,6 +124,7 @@ impl RocksdbClient {
             transactions_index,
             drop_base_index,
             inner,
+            constants: config.constants.clone(),
         })
     }
 
@@ -130,22 +135,22 @@ impl RocksdbClient {
     }
 
     pub fn insert_transaction(&self, transaction: &Transaction) {
-        let mut key_index = [0_u8; 12];
+        let mut key_index = [0_u8; 4 + 8 + 32];
 
         key_index[0..4].copy_from_slice(&transaction.now.to_be_bytes());
-        key_index[4..].copy_from_slice(&transaction.lt.to_be_bytes());
+        key_index[4..12].copy_from_slice(&transaction.lt.to_be_bytes());
+        key_index[12..].copy_from_slice(&transaction.account_addr.get_bytestring_on_stack(0));
 
         if !self
             .transactions_index
             .contains_key(key_index)
             .expect("cant check transaction_index: rocksdb is dead")
         {
-            let mut key = [0_u8; 13];
+            let mut key = [0_u8; 1 + 4 + 8 + 32];
             let value = transaction.write_to_bytes().expect("trust me");
 
             key[0] = false as u8;
-            key[1..5].copy_from_slice(&transaction.now.to_be_bytes());
-            key[5..].copy_from_slice(&transaction.lt.to_be_bytes());
+            key[1..].copy_from_slice(&key_index);
 
             let mut batch = WriteBatchWithTransaction::<false>::default();
 
@@ -160,12 +165,13 @@ impl RocksdbClient {
     }
 
     pub fn update_transaction_processed(&self, transaction: Transaction) {
-        let mut key = [0_u8; 13];
+        let mut key = [0_u8; 1 + 4 + 8 + 32];
         let value = transaction.write_to_bytes().expect("trust me");
 
         key[0] = false as u8;
         key[1..5].copy_from_slice(&transaction.now.to_be_bytes());
-        key[5..].copy_from_slice(&transaction.lt.to_be_bytes());
+        key[5..13].copy_from_slice(&transaction.lt.to_be_bytes());
+        key[13..].copy_from_slice(&transaction.account_addr.get_bytestring_on_stack(0));
 
         let mut batch = WriteBatchWithTransaction::<false>::default();
         batch.delete_cf(&self.transactions.cf(), key);
@@ -177,6 +183,30 @@ impl RocksdbClient {
             .raw()
             .write(batch)
             .expect("cant update transaction: rocksdb is dead");
+    }
+
+    fn update_processed_transactions_to_unprocessed(&self, from_timestamp: u32) {
+        let mut from_key = [0_u8; 1 + 4 + 8 + 32];
+        from_key[0] = true as u8;
+        from_key[1..5].copy_from_slice(&from_timestamp.to_be_bytes());
+
+        let iter = self
+            .transactions
+            .iterator(IteratorMode::From(&from_key, rocksdb::Direction::Forward))
+            .fuse();
+
+        let mut batch = WriteBatchWithTransaction::<false>::default();
+        for (mut key, value) in iter.flatten() {
+            key[0] = false as u8;
+            batch.put_cf(&self.transactions.cf(), key, value);
+        }
+
+        batch.delete_range_cf(&self.transactions.cf(), from_key, [u8::MAX; 1 + 4 + 8 + 32]);
+
+        self.inner
+            .raw()
+            .write(batch)
+            .expect("update_processed_transactions_to_unprocessed ERROR: cant update transactions: rocksdb is dead");
     }
 
     pub fn iterate_unprocessed_transactions(&self) -> impl Iterator<Item = Transaction> + '_ {
@@ -212,16 +242,23 @@ impl RocksdbClient {
             .count()
     }
 
-    pub fn check_drop_base_index(&self, index: u32) -> bool {
+    pub fn check_drop_base_index(&self) -> StreamFrom {
         let mut key = [0_u8; 4];
-        key.copy_from_slice(&index.to_be_bytes());
+        key.copy_from_slice(&self.constants.drop_base_index.to_be_bytes());
 
         match self
             .drop_base_index
             .contains_key(key)
             .expect("cant check transaction_index: rocksdb is dead")
         {
-            true => true,
+            true => {
+                if self.constants.postgres_base_is_dropped {
+                    self.update_processed_transactions_to_unprocessed(
+                        self.constants.from_timestamp,
+                    );
+                }
+                StreamFrom::Stored
+            }
             false => {
                 let mut batch = WriteBatchWithTransaction::<false>::default();
 
@@ -247,7 +284,7 @@ impl RocksdbClient {
                     .put_cf(&self.drop_base_index.cf(), key, [])
                     .expect("cant put drop_base_index: rocksdb is dead");
 
-                false
+                StreamFrom::Beginning
             }
         }
     }

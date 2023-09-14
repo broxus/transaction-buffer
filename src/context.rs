@@ -1,5 +1,5 @@
 use crate::cache::RawCache;
-use crate::models::BufferedConsumerConfig;
+use crate::models::{BufferedConsumerConfig, RocksdbClientConstants};
 use crate::rocksdb_client::RocksdbClient;
 use crate::utils::{create_rocksdb, create_transaction_parser};
 use nekoton_abi::TransactionParser;
@@ -22,7 +22,15 @@ impl BufferContext {
         let time = RwLock::new(0);
         let parser =
             create_transaction_parser(config.any_extractable.clone()).expect("cant create parser");
-        let rocksdb = create_rocksdb(&config.rocksdb_path);
+        let rocksdb = create_rocksdb(
+            &config.rocksdb_path,
+            RocksdbClientConstants {
+                drop_base_index: config.rocksdb_drop_base_index,
+                from_timestamp: config.parsing_from_timestamp.unwrap_or_default(),
+                postgres_base_is_dropped: config.postgres_base_is_dropped.unwrap_or_default(),
+            },
+        );
+
         let timestamp_last_block = RwLock::new(0_i32);
 
         Arc::new(Self {

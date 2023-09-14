@@ -6,7 +6,7 @@ use weedb::{Caches, ColumnFamily};
 pub struct Transactions;
 
 impl Transactions {
-    pub const KEY_LEN: usize = 4 + 8 + 1;
+    pub const KEY_LEN: usize = 1 + 4 + 8 + 32;
 }
 
 impl ColumnFamily for Transactions {
@@ -20,7 +20,7 @@ impl ColumnFamily for Transactions {
 pub struct TransactionsIndex;
 
 impl TransactionsIndex {
-    pub const KEY_LEN: usize = 4 + 8;
+    pub const KEY_LEN: usize = 4 + 8 + 32;
 }
 
 impl ColumnFamily for TransactionsIndex {

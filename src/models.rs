@@ -5,6 +5,13 @@ use tokio::sync::Notify;
 use ton_block::Transaction;
 use transaction_consumer::TransactionConsumer;
 
+#[derive(Debug, Clone)]
+pub struct RocksdbClientConstants {
+    pub drop_base_index: u32,
+    pub from_timestamp: u32,
+    pub postgres_base_is_dropped: bool,
+}
+
 pub struct BufferedConsumerConfig {
     pub transaction_consumer: Arc<TransactionConsumer>,
     pub any_extractable: Vec<AnyExtractable>,
@@ -13,6 +20,8 @@ pub struct BufferedConsumerConfig {
     pub cache_timer: i32,
     pub rocksdb_path: String,
     pub rocksdb_drop_base_index: u32,
+    pub parsing_from_timestamp: Option<u32>,
+    pub postgres_base_is_dropped: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -22,6 +31,7 @@ pub enum AnyExtractable {
 }
 
 impl BufferedConsumerConfig {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         transaction_consumer: Arc<TransactionConsumer>,
         any_extractable: Vec<AnyExtractable>,
@@ -30,6 +40,8 @@ impl BufferedConsumerConfig {
         cache_timer: i32,
         rocksdb_path: String,
         rocksdb_drop_base_index: u32,
+        parsing_from_timestamp: Option<u32>,
+        postgres_base_is_dropped: Option<bool>,
     ) -> Self {
         Self {
             transaction_consumer,
@@ -39,6 +51,8 @@ impl BufferedConsumerConfig {
             cache_timer,
             rocksdb_path,
             rocksdb_drop_base_index,
+            parsing_from_timestamp,
+            postgres_base_is_dropped,
         }
     }
 }
