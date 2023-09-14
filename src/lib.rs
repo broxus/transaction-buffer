@@ -79,6 +79,7 @@ async fn parse_kafka_transactions(
 }
 
 async fn sync_kafka(context: &BufferContext, stream_from: StreamFrom) -> Offsets {
+    let from_timestamp = context.config.parsing_from_timestamp.unwrap_or_default() as i32;
     let (mut stream_transactions, offsets) = context
         .config
         .transaction_consumer
@@ -91,11 +92,13 @@ async fn sync_kafka(context: &BufferContext, stream_from: StreamFrom) -> Offsets
     while let Some(produced_transaction) = stream_transactions.next().await {
         count += 1;
         let transaction: Transaction = produced_transaction.transaction.clone();
-        let transaction_time = transaction.now() as i64;
-        *context.timestamp_last_block.write().await = transaction_time as i32;
+        let transaction_time = transaction.now() as i32;
+        *context.timestamp_last_block.write().await = transaction_time;
 
-        if buff_extracted_events(&transaction, &context.parser).is_some() {
-            transactions.push(transaction);
+        if transaction_time >= from_timestamp {
+            if buff_extracted_events(&transaction, &context.parser).is_some() {
+                transactions.push(transaction);
+            }
         }
 
         if count >= context.config.buff_size
