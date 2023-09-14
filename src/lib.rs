@@ -95,10 +95,10 @@ async fn sync_kafka(context: &BufferContext, stream_from: StreamFrom) -> Offsets
         let transaction_time = transaction.now() as i32;
         *context.timestamp_last_block.write().await = transaction_time;
 
-        if transaction_time >= from_timestamp {
-            if buff_extracted_events(&transaction, &context.parser).is_some() {
-                transactions.push(transaction);
-            }
+        if transaction_time >= from_timestamp
+            && buff_extracted_events(&transaction, &context.parser).is_some()
+        {
+            transactions.push(transaction);
         }
 
         if count >= context.config.buff_size
@@ -116,7 +116,7 @@ async fn sync_kafka(context: &BufferContext, stream_from: StreamFrom) -> Offsets
                 "COMMIT KAFKA {} transactions timestamp_block {} date: {}",
                 count,
                 transaction_time,
-                NaiveDateTime::from_timestamp_opt(transaction_time, 0).unwrap()
+                NaiveDateTime::from_timestamp_opt(transaction_time.into(), 0).unwrap()
             );
             count = 0;
             *context.time.write().await = 0;

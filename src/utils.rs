@@ -1,4 +1,4 @@
-use crate::models::{AnyExtractable, BufferedConsumerConfig, RocksdbClientConstants};
+use crate::models::{AnyExtractable, RocksdbClientConstants};
 use nekoton_abi::transaction_parser::{Extracted, ExtractedOwned, ParsedType};
 use nekoton_abi::TransactionParser;
 use std::sync::Arc;
