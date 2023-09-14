@@ -1,0 +1,38 @@
+use crate::cache::RawCache;
+use crate::models::BufferedConsumerConfig;
+use crate::storage::RocksdbClient;
+use crate::utils::{create_rocksdb, create_transaction_parser};
+use nekoton_abi::TransactionParser;
+use std::sync::Arc;
+use tokio::sync::{Notify, RwLock};
+
+pub struct BufferContext {
+    pub rocksdb: RocksdbClient,
+    pub raw_cache: RawCache,
+    pub time: RwLock<i32>,
+    pub parser: TransactionParser,
+    pub config: BufferedConsumerConfig,
+    pub timestamp_last_block: RwLock<i32>,
+    pub notify_for_services: Arc<Notify>,
+}
+
+impl BufferContext {
+    pub fn new(config: BufferedConsumerConfig, notify_for_services: Arc<Notify>) -> Arc<Self> {
+        let raw_cache = RawCache::default();
+        let time = RwLock::new(0);
+        let parser =
+            create_transaction_parser(config.any_extractable.clone()).expect("cant create parser");
+        let rocksdb = create_rocksdb(&config.rocksdb_path);
+        let timestamp_last_block = RwLock::new(0_i32);
+
+        Arc::new(Self {
+            rocksdb,
+            raw_cache,
+            time,
+            parser,
+            config,
+            timestamp_last_block,
+            notify_for_services,
+        })
+    }
+}

@@ -1,19 +1,14 @@
-use crate::storage::PersistentStorage;
+use crate::storage::RocksdbClient;
 use itertools::Itertools;
 use std::cmp::Ordering;
-use std::sync::Arc;
 use tokio::sync::RwLock;
 use ton_block::Transaction;
 
-#[derive(Clone)]
-pub struct RawCache(Arc<RwLock<Vec<Transaction>>>);
+#[derive(Default)]
+pub struct RawCache(RwLock<Vec<Transaction>>);
 
 impl RawCache {
-    pub fn new() -> Self {
-        Self(Arc::new(RwLock::new(vec![])))
-    }
-
-    pub async fn fill_raws(&self, rocksdb: &PersistentStorage) {
+    pub async fn fill_raws(&self, rocksdb: &RocksdbClient) {
         let raw_transactions = rocksdb.iterate_unprocessed_transactions().collect_vec();
         *self.0.write().await = raw_transactions;
     }

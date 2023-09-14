@@ -23,7 +23,7 @@ impl Default for DbOptions {
     }
 }
 
-pub struct PersistentStorage {
+pub struct RocksdbClient {
     pub transactions: Table<tables::Transactions>,
     pub transactions_index: Table<tables::TransactionsIndex>,
     pub drop_base_index: Table<tables::DropBaseIndex>,
@@ -31,15 +31,15 @@ pub struct PersistentStorage {
 }
 
 #[derive(Debug, Clone)]
-pub struct PersistentStorageConfig {
+pub struct RocksdbClientConfig {
     pub persistent_db_path: PathBuf,
     pub persistent_db_options: DbOptions,
 }
 
-impl PersistentStorage {
+impl RocksdbClient {
     const DB_VERSION: Semver = [0, 1, 0];
 
-    pub fn new(config: &PersistentStorageConfig) -> Result<Self> {
+    pub fn new(config: &RocksdbClientConfig) -> Result<Self> {
         let limit = match fdlimit::raise_fd_limit() {
             // New fd limit
             Some(limit) => limit,
@@ -253,7 +253,7 @@ impl PersistentStorage {
     }
 }
 
-impl Drop for PersistentStorage {
+impl Drop for RocksdbClient {
     fn drop(&mut self) {
         self.inner.raw().cancel_all_background_work(true);
     }
