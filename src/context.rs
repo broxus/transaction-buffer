@@ -1,6 +1,6 @@
 use crate::cache::RawCache;
 use crate::models::BufferedConsumerConfig;
-use crate::storage::RocksdbClient;
+use crate::rocksdb_client::RocksdbClient;
 use crate::utils::{create_rocksdb, create_transaction_parser};
 use nekoton_abi::TransactionParser;
 use std::sync::Arc;

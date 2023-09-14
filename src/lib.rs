@@ -3,7 +3,7 @@ mod context;
 pub mod drop_base;
 pub mod models;
 mod sqlx_client;
-mod storage;
+mod rocksdb_client;
 pub mod util_for_local_tests;
 pub mod utils;
 
@@ -21,7 +21,7 @@ use std::time::Duration;
 use tokio::sync::Notify;
 use tokio::time::sleep;
 use ton_block::Transaction;
-use transaction_consumer::StreamFrom;
+use transaction_consumer::{Offsets, StreamFrom};
 
 #[allow(clippy::type_complexity)]
 pub fn start_parsing_and_get_channels(config: BufferedConsumerConfig) -> BufferedConsumerChannels {
@@ -65,6 +65,18 @@ async fn parse_kafka_transactions(
         tokio::spawn(timer(context));
     }
 
+    let offsets = sync_kafka(&context).await;
+    log::info!("kafka synced");
+
+    {
+        let context = context.clone();
+        tokio::spawn(parse_transaction(tx_parsed_events, context));
+    }
+
+    realtime_processing_kafka(&context, offsets).await;
+}
+
+async fn sync_kafka(context: &BufferContext) -> Offsets {
     let stream_from = match context
         .rocksdb
         .check_drop_base_index(context.config.rocksdb_drop_base_index)
@@ -118,14 +130,10 @@ async fn parse_kafka_transactions(
         .rocksdb
         .insert_transactions_with_drain(&mut transactions);
 
-    log::info!("kafka synced");
+    offsets
+}
 
-    {
-        let context = context.clone();
-
-        tokio::spawn(parse_transaction(tx_parsed_events, context));
-    }
-
+async fn realtime_processing_kafka(context: &BufferContext, offsets: Offsets) {
     let mut stream_transactions = context
         .config
         .transaction_consumer

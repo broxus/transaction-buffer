@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 use ton_block::{Transaction, TrComputePhase};
 use crate::context::BufferContext;
-use crate::storage::{RocksdbClientConfig, RocksdbClient};
+use crate::rocksdb_client::{RocksdbClientConfig, RocksdbClient};
 
 pub fn split_any_extractable(
     any_extractable: Vec<AnyExtractable>,
