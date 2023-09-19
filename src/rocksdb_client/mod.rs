@@ -308,10 +308,10 @@ impl RocksdbClient {
             })
             .fuse();
 
-        let mut transactions = Vec::with_capacity(5_000);
-        let capacity = 5000;
+        let mut transactions = Vec::with_capacity(1_000);
+        let capacity = 1000;
         for (index, value) in iter.enumerate() {
-            if index >= capacity - 1 {
+            if index >= 1000 - 1 {
                 break;
             }
             transactions.push(base64::encode(&value));
