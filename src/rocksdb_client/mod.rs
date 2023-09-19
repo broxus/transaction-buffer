@@ -291,7 +291,7 @@ impl RocksdbClient {
         }
     }
 
-    pub fn get_batch_transactions(&self, from_timestamp: u32, processed: bool) -> Vec<String> {
+    pub fn get_batch_transactions(&self, from_timestamp: u32, processed: bool, capacity: usize) -> Vec<String> {
         let mut from_key = [0_u8; 1 + 4 + 8 + 32];
         from_key[0] = processed as u8;
         from_key[1..5].copy_from_slice(&from_timestamp.to_be_bytes());
@@ -308,10 +308,9 @@ impl RocksdbClient {
             })
             .fuse();
 
-        let mut transactions = Vec::with_capacity(1_000);
-        let capacity = 1000;
+        let mut transactions = Vec::with_capacity(capacity);
         for (index, value) in iter.enumerate() {
-            if index >= 1000 - 1 {
+            if index >= capacity - 1 {
                 break;
             }
             transactions.push(base64::encode(&value));
