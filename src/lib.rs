@@ -2,7 +2,7 @@ mod cache;
 mod context;
 pub mod drop_base;
 pub mod models;
-mod rocksdb_client;
+pub mod rocksdb_client;
 mod sqlx_client;
 pub mod util_for_local_tests;
 pub mod utils;
