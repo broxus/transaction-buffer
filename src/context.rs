@@ -1,13 +1,15 @@
-use crate::cache::RawCache;
-use crate::models::{BufferedConsumerConfig, RocksdbClientConstants};
-use crate::rocksdb_client::RocksdbClient;
-use crate::utils::{create_rocksdb, create_transaction_parser};
-use nekoton_abi::TransactionParser;
 use std::sync::Arc;
+
+use nekoton_abi::TransactionParser;
 use tokio::sync::{Notify, RwLock};
 
+use crate::cache::RawCache;
+use crate::models::BufferedConsumerConfig;
+use crate::rocksdb_client::RocksdbClient;
+use crate::utils::create_transaction_parser;
+
 pub struct BufferContext {
-    pub rocksdb: RocksdbClient,
+    pub rocksdb: Arc<RocksdbClient>,
     pub raw_cache: RawCache,
     pub time: RwLock<i32>,
     pub parser: TransactionParser,
@@ -17,19 +19,11 @@ pub struct BufferContext {
 }
 
 impl BufferContext {
-    pub fn new(config: BufferedConsumerConfig, notify_for_services: Arc<Notify>) -> Arc<Self> {
+    pub fn new(config: BufferedConsumerConfig, notify_for_services: Arc<Notify>, rocksdb: Arc<RocksdbClient>) -> Arc<Self> {
         let raw_cache = RawCache::default();
         let time = RwLock::new(0);
         let parser =
             create_transaction_parser(config.any_extractable.clone()).expect("cant create parser");
-        let rocksdb = create_rocksdb(
-            &config.rocksdb_path,
-            RocksdbClientConstants {
-                drop_base_index: config.rocksdb_drop_base_index,
-                from_timestamp: config.parsing_from_timestamp.unwrap_or_default(),
-                postgres_base_is_dropped: config.postgres_base_is_dropped.unwrap_or_default(),
-            },
-        );
 
         let timestamp_last_block = RwLock::new(0_i32);
 

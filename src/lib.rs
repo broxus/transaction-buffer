@@ -6,10 +6,11 @@ mod rocksdb_client;
 mod sqlx_client;
 pub mod util_for_local_tests;
 pub mod utils;
+pub mod load_from_api;
 
 use crate::context::BufferContext;
-use crate::models::{BufferedConsumerChannels, BufferedConsumerConfig};
-use crate::utils::{buff_extracted_events, timer};
+use crate::models::{BufferedConsumerChannels, BufferedConsumerConfig, RocksdbClientConstants};
+use crate::utils::{buff_extracted_events, create_rocksdb, timer};
 use chrono::NaiveDateTime;
 use futures::channel::mpsc::{Receiver, Sender};
 use futures::SinkExt;
@@ -22,20 +23,31 @@ use tokio::sync::Notify;
 use tokio::time::sleep;
 use ton_block::Transaction;
 use transaction_consumer::{Offsets, StreamFrom};
+use crate::rocksdb_client::RocksdbClient;
 
 #[allow(clippy::type_complexity)]
 pub fn start_parsing_and_get_channels(config: BufferedConsumerConfig) -> BufferedConsumerChannels {
     let (tx_parsed_events, rx_parsed_events) = futures::channel::mpsc::channel(1);
     let (tx_commit, rx_commit) = futures::channel::mpsc::channel(1);
     let notify_for_services = Arc::new(Notify::new());
+    let rocksdb = Arc::new(create_rocksdb(
+        &config.rocksdb_path,
+        RocksdbClientConstants {
+            drop_base_index: config.rocksdb_drop_base_index,
+            from_timestamp: config.parsing_from_timestamp.unwrap_or_default(),
+            postgres_base_is_dropped: config.postgres_base_is_dropped.unwrap_or_default(),
+        },
+    ));
 
     {
         let notify_for_services = notify_for_services.clone();
+        let rocksdb = rocksdb.clone();
         tokio::spawn(parse_kafka_transactions(
             config,
             tx_parsed_events,
             notify_for_services,
             rx_commit,
+            rocksdb,
         ));
     }
 
@@ -43,6 +55,7 @@ pub fn start_parsing_and_get_channels(config: BufferedConsumerConfig) -> Buffere
         rx_parsed_events,
         tx_commit,
         notify_for_services,
+        rocksdb_client: rocksdb,
     }
 }
 
@@ -52,8 +65,9 @@ async fn parse_kafka_transactions(
     tx_parsed_events: Sender<Vec<(Vec<ExtractedOwned>, Transaction)>>,
     notify_for_services: Arc<Notify>,
     commit_rx: Receiver<Vec<Transaction>>,
+    rocksdb_client: Arc<RocksdbClient>,
 ) {
-    let context = BufferContext::new(config, notify_for_services);
+    let context = BufferContext::new(config, notify_for_services, rocksdb_client);
 
     {
         let context = context.clone();

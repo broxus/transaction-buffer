@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tokio::sync::Notify;
 use ton_block::Transaction;
 use transaction_consumer::TransactionConsumer;
+use crate::rocksdb_client::RocksdbClient;
 
 #[derive(Debug, Clone)]
 pub struct RocksdbClientConstants {
@@ -61,4 +62,5 @@ pub struct BufferedConsumerChannels {
     pub rx_parsed_events: Receiver<Vec<(Vec<ExtractedOwned>, Transaction)>>,
     pub tx_commit: Sender<Vec<Transaction>>,
     pub notify_for_services: Arc<Notify>,
+    pub rocksdb_client: Arc<RocksdbClient>,
 }

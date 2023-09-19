@@ -290,6 +290,35 @@ impl RocksdbClient {
             }
         }
     }
+
+    pub fn get_batch_transactions(&self, from_timestamp: u32, processed: bool) -> Vec<String> {
+        let mut from_key = [0_u8; 1 + 4 + 8 + 32];
+        from_key[0] = processed as u8;
+        from_key[1..5].copy_from_slice(&from_timestamp.to_be_bytes());
+
+        let iter = self
+            .transactions
+            .iterator(IteratorMode::From(&from_key, rocksdb::Direction::Forward))
+            .filter_map(|key| {
+                let (key, value) = key.ok()?;
+                if key[0] != processed as u8 {
+                    return None;
+                }
+                Some(value)
+            })
+            .fuse();
+
+        let mut transactions = Vec::with_capacity(5_000);
+        let capacity = 5000;
+        for (index, value) in iter.enumerate() {
+            if index >= capacity - 1 {
+                break;
+            }
+            transactions.push(base64::encode(&value));
+        }
+
+        transactions
+    }
 }
 
 impl Drop for RocksdbClient {

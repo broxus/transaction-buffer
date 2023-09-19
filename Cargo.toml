@@ -21,6 +21,8 @@ ton_abi = { git = "https://github.com/broxus/ton-labs-abi.git" }
 weedb = "0.1.1"
 fdlimit = "0.2.1"
 rlimit = "0.9.1"
+base64 = "0.13.0"
+reqwest = "0.11.20"
 
 [dev-dependencies]
 env_logger = "0.10.0"
