@@ -35,16 +35,16 @@ impl RawCache {
     ) -> (Vec<RawTransaction>, Vec<(i32, i64)>) {
         let mut lock = self.0.write().await;
         let time = *timer.read().await;
-        let (res, cache) =
-            lock.drain(..)
-                .fold((vec![], vec![]), |(mut res, mut cache), x| {
-                    if (x.data.now as i32) < last_timestamp_block || time >= cache_timer {
-                        res.push(x)
-                    } else {
-                        cache.push(x)
-                    };
-                    (res, cache)
-                });
+        let (res, cache) = lock
+            .drain(..)
+            .fold((vec![], vec![]), |(mut res, mut cache), x| {
+                if (x.data.now as i32) < last_timestamp_block || time >= cache_timer {
+                    res.push(x)
+                } else {
+                    cache.push(x)
+                };
+                (res, cache)
+            });
 
         *lock = cache;
 

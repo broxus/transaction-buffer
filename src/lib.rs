@@ -6,6 +6,7 @@ mod sqlx_client;
 use crate::cache::RawCache;
 use crate::models::{
     AnyExtractable, BufferedConsumerChannels, BufferedConsumerConfig, RawTransaction,
+    RawTransactionFromDb,
 };
 use crate::sqlx_client::{
     create_table_raw_transactions, get_count_not_processed_raw_transactions,
@@ -23,7 +24,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Notify, RwLock};
 use tokio::time::sleep;
-use ton_block::{TrComputePhase, Transaction};
+use ton_block::{MsgAddressInt, TrComputePhase, Transaction};
 use transaction_consumer::StreamFrom;
 
 pub fn split_any_extractable(
@@ -131,6 +132,7 @@ pub fn test_from_raw_transactions(
         timestamp_last_block,
         time,
         2,
+        false,
     ));
     BufferedConsumerChannels {
         rx_parsed_events,
@@ -193,8 +195,10 @@ async fn parse_kafka_transactions(
         *timestamp_last_block.write().await = transaction_time as i32;
 
         if buff_extracted_events(&transaction, &parser).is_some() {
-            raw_transactions.push(transaction.into());
+            raw_transactions.push(transaction.clone().into());
         }
+
+        save_failed_transactions(&config, &mut raw_transactions, &transaction);
 
         if count >= config.buff_size || *time.read().await >= config.commit_time_secs {
             if !raw_transactions.is_empty() {
@@ -242,6 +246,7 @@ async fn parse_kafka_transactions(
             timestamp_last_block,
             timer,
             config.cache_timer,
+            !config.save_failed_transactions_for_accounts.is_empty(),
         ));
     }
 
@@ -261,8 +266,10 @@ async fn parse_kafka_transactions(
             insert_raw_transaction(transaction.clone().into(), &config.pg_pool)
                 .await
                 .expect("cant insert raw_transaction to db");
-            raw_cache.insert_raw(transaction.into()).await;
+            raw_cache.insert_raw(transaction.clone().into()).await;
         }
+
+        save_failed_transactions(&config, &mut raw_transactions, &transaction);
 
         *timestamp_last_block.write().await = transaction_timestamp as i32;
         *time.write().await = 0;
@@ -280,6 +287,23 @@ async fn parse_kafka_transactions(
     }
 }
 
+fn save_failed_transactions(
+    config: &BufferedConsumerConfig,
+    raw_transactions: &mut Vec<RawTransactionFromDb>,
+    transaction: &Transaction,
+) {
+    if config.save_failed_transactions_for_accounts.contains(
+        &MsgAddressInt::with_standart(None, 0, transaction.account_addr.clone())
+            .unwrap_or_default(),
+    ) {
+        if let Some(exit_code) = get_exit_code(transaction) {
+            if exit_code > 0 {
+                raw_transactions.push(transaction.clone().into());
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn parse_raw_transaction(
     parser: TransactionParser,
@@ -291,6 +315,7 @@ async fn parse_raw_transaction(
     timestamp_last_block: Arc<RwLock<i32>>,
     timer: Arc<RwLock<i32>>,
     cache_timer: i32,
+    send_failed_transactions: bool,
 ) {
     let count_not_processed = get_count_not_processed_raw_transactions(&pg_pool).await;
     let mut i: i64 = 0;
@@ -321,8 +346,16 @@ async fn parse_raw_transaction(
             };
 
             if let Some(events) = buff_extracted_events(&raw_transaction.data, &parser) {
-                send_message.push((events, raw_transaction));
+                send_message.push((events, raw_transaction.clone()));
             };
+
+            if send_failed_transactions {
+                if let Some(exit_code) = get_exit_code(&raw_transaction.data) {
+                    if exit_code > 0 {
+                        send_message.push((vec![], raw_transaction));
+                    }
+                }
+            }
         }
         if !send_message.is_empty() {
             tx.send(send_message).await.expect("dead sender");
@@ -433,6 +466,17 @@ pub fn filter_extracted(
         return None;
     }
     Some(extracted.into_iter().map(|x| x.into_owned()).collect())
+}
+
+pub fn get_exit_code(transaction: &Transaction) -> Option<i32> {
+    if let Ok(ton_block::TransactionDescr::Ordinary(desc)) = transaction.description.read_struct() {
+        match &desc.compute_ph {
+            TrComputePhase::Vm(vm) => Some(vm.exit_code),
+            TrComputePhase::Skipped(_) => None,
+        }
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
