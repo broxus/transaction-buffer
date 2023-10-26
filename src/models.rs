@@ -5,7 +5,7 @@ use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
 use tokio::sync::Notify;
-use ton_block::{Deserializable, GetRepresentationHash, Serializable, Transaction};
+use ton_block::{Deserializable, GetRepresentationHash, MsgAddressInt, Serializable, Transaction};
 use ton_types::UInt256;
 use transaction_consumer::TransactionConsumer;
 
@@ -16,6 +16,7 @@ pub struct BufferedConsumerConfig {
     pub buff_size: i64,
     pub commit_time_secs: i32,
     pub cache_timer: i32,
+    pub save_failed_transactions_for_accounts: Vec<MsgAddressInt>,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +33,7 @@ impl BufferedConsumerConfig {
         buff_size: i64,
         commit_time_secs: i32,
         cache_timer: i32,
+        save_failed_transactions_for_accounts: Option<Vec<MsgAddressInt>>,
     ) -> Self {
         Self {
             transaction_consumer,
@@ -40,6 +42,8 @@ impl BufferedConsumerConfig {
             buff_size,
             commit_time_secs,
             cache_timer,
+            save_failed_transactions_for_accounts: save_failed_transactions_for_accounts
+                .unwrap_or_default(),
         }
     }
 }
