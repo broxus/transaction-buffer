@@ -6,7 +6,6 @@ mod sqlx_client;
 use crate::cache::RawCache;
 use crate::models::{
     AnyExtractable, BufferedConsumerChannels, BufferedConsumerConfig, RawTransaction,
-    RawTransactionFromDb,
 };
 use crate::sqlx_client::{
     create_table_raw_transactions, get_count_not_processed_raw_transactions,
@@ -194,11 +193,11 @@ async fn parse_kafka_transactions(
         let transaction_time = transaction.now() as i64;
         *timestamp_last_block.write().await = transaction_time as i32;
 
-        if buff_extracted_events(&transaction, &parser).is_some() {
-            raw_transactions.push(transaction.clone().into());
+        if buff_extracted_events(&transaction, &parser).is_some()
+            || check_failed_transactions(&config, &transaction)
+        {
+            raw_transactions.push(transaction.into());
         }
-
-        save_failed_transactions(&config, &mut raw_transactions, &transaction);
 
         if count >= config.buff_size || *time.read().await >= config.commit_time_secs {
             if !raw_transactions.is_empty() {
@@ -262,14 +261,14 @@ async fn parse_kafka_transactions(
         let transaction: Transaction = produced_transaction.transaction.clone();
         let transaction_timestamp = transaction.now;
 
-        if buff_extracted_events(&transaction, &parser).is_some() {
+        if buff_extracted_events(&transaction, &parser).is_some()
+            || check_failed_transactions(&config, &transaction)
+        {
             insert_raw_transaction(transaction.clone().into(), &config.pg_pool)
                 .await
                 .expect("cant insert raw_transaction to db");
-            raw_cache.insert_raw(transaction.clone().into()).await;
-        }
-
-        save_failed_transactions(&config, &mut raw_transactions, &transaction);
+            raw_cache.insert_raw(transaction.into()).await;
+        };
 
         *timestamp_last_block.write().await = transaction_timestamp as i32;
         *time.write().await = 0;
@@ -287,21 +286,19 @@ async fn parse_kafka_transactions(
     }
 }
 
-fn save_failed_transactions(
-    config: &BufferedConsumerConfig,
-    raw_transactions: &mut Vec<RawTransactionFromDb>,
-    transaction: &Transaction,
-) {
+fn check_failed_transactions(config: &BufferedConsumerConfig, transaction: &Transaction) -> bool {
     if config.save_failed_transactions_for_accounts.contains(
         &MsgAddressInt::with_standart(None, 0, transaction.account_addr.clone())
             .unwrap_or_default(),
     ) {
         if let Some(exit_code) = get_exit_code(transaction) {
             if exit_code > 0 {
-                raw_transactions.push(transaction.clone().into());
+                return true;
             }
         }
     }
+
+    false
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -347,9 +344,7 @@ async fn parse_raw_transaction(
 
             if let Some(events) = buff_extracted_events(&raw_transaction.data, &parser) {
                 send_message.push((events, raw_transaction.clone()));
-            };
-
-            if send_failed_transactions {
+            } else if send_failed_transactions {
                 if let Some(exit_code) = get_exit_code(&raw_transaction.data) {
                     if exit_code > 0 {
                         send_message.push((vec![], raw_transaction));
@@ -392,6 +387,12 @@ async fn parse_raw_transaction(
         for raw_transaction in raw_transactions {
             if let Some(events) = buff_extracted_events(&raw_transaction.data, &parser) {
                 send_message.push((events, raw_transaction));
+            } else if send_failed_transactions {
+                if let Some(exit_code) = get_exit_code(&raw_transaction.data) {
+                    if exit_code > 0 {
+                        send_message.push((vec![], raw_transaction));
+                    }
+                }
             };
         }
 
