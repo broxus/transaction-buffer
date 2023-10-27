@@ -287,10 +287,21 @@ async fn parse_kafka_transactions(
 }
 
 fn check_failed_transactions(config: &BufferedConsumerConfig, transaction: &Transaction) -> bool {
-    if config.save_failed_transactions_for_accounts.contains(
-        &MsgAddressInt::with_standart(None, 0, transaction.account_addr.clone())
-            .unwrap_or_default(),
-    ) {
+    let src = transaction
+        .in_msg
+        .as_ref()
+        .and_then(|im_cell| im_cell.read_struct().ok())
+        .and_then(|in_msg| in_msg.src());
+
+    let account_addr =
+        MsgAddressInt::with_standart(None, 0, transaction.account_addr.clone()).unwrap_or_default();
+    if config
+        .save_failed_transactions_for_accounts
+        .contains(&account_addr)
+        || src.map_or(false, |s| {
+            config.save_failed_transactions_for_accounts.contains(&s)
+        })
+    {
         if let Some(exit_code) = get_exit_code(transaction) {
             if exit_code > 0 {
                 return true;
