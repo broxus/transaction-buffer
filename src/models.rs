@@ -1,4 +1,5 @@
 use anyhow::Context;
+use dashmap::DashSet;
 use futures::channel::mpsc::{Receiver, Sender};
 use nekoton_abi::transaction_parser::ExtractedOwned;
 use sqlx::postgres::PgRow;
@@ -16,7 +17,7 @@ pub struct BufferedConsumerConfig {
     pub buff_size: i64,
     pub commit_time_secs: i32,
     pub cache_timer: i32,
-    pub save_failed_transactions_for_accounts: Vec<MsgAddressInt>,
+    pub save_failed_transactions_for_accounts: Arc<DashSet<MsgAddressInt>>,
 }
 
 #[derive(Debug, Clone)]
@@ -33,7 +34,7 @@ impl BufferedConsumerConfig {
         buff_size: i64,
         commit_time_secs: i32,
         cache_timer: i32,
-        save_failed_transactions_for_accounts: Option<Vec<MsgAddressInt>>,
+        save_failed_transactions_for_accounts: Option<Arc<DashSet<MsgAddressInt>>>,
     ) -> Self {
         Self {
             transaction_consumer,
