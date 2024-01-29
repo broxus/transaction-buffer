@@ -3,7 +3,13 @@ use ton_block::{Deserializable, Transaction};
 
 use crate::rocksdb_client::RocksdbClient;
 
-pub async fn load_from_api(rocksdb_client: &RocksdbClient, from_timestamp: u32, url_api: &str, api_key: &str) -> Result<(), anyhow::Error> {
+pub async fn load_from_api(
+    rocksdb_client: &RocksdbClient,
+    from_timestamp: u32,
+    to_timestamp: u32,
+    url_api: &str,
+    api_key: &str,
+) -> Result<(), anyhow::Error> {
     let client = reqwest::Client::new();
     let mut is_processed = false;
 
@@ -12,20 +18,31 @@ pub async fn load_from_api(rocksdb_client: &RocksdbClient, from_timestamp: u32, 
     let mut from_timestamp_request = from_timestamp;
     let mut last_timestamp_lt = 0;
     loop {
-        let url = format!("{url_api}/raw_transactions/{from_timestamp_request}/{is_processed}/{api_key}");
+        let url =
+            format!("{url_api}/raw_transactions/{from_timestamp_request}/{to_timestamp}/{is_processed}/{api_key}");
         let response: Vec<String> = client.get(&url).send().await?.json().await?;
-        let mut transactions = response.into_iter().map(|x| Transaction::construct_from_bytes(&base64::decode(x).unwrap()).unwrap()).collect_vec();
+        let mut transactions = response
+            .into_iter()
+            .map(|x| Transaction::construct_from_bytes(&base64::decode(x).unwrap()).unwrap())
+            .collect_vec();
 
         if transactions.is_empty() && is_processed {
             break;
         } else if transactions.is_empty() {
             is_processed = true;
             from_timestamp_request = from_timestamp;
+            last_timestamp_lt = 0;
         } else {
             let (last_timestamp, last_lt) = transactions.last().map(|x| (x.now, x.lt)).unwrap();
 
             if (last_timestamp, last_lt) == (from_timestamp_request, last_timestamp_lt) {
-                break;
+                if is_processed {
+                    break;
+                } else {
+                    is_processed = true;
+                    from_timestamp_request = from_timestamp;
+                    last_timestamp_lt = 0;
+                }
             } else {
                 (from_timestamp_request, last_timestamp_lt) = (last_timestamp, last_lt);
             }
@@ -65,8 +82,8 @@ fn prepare_test(level_filter: log::LevelFilter) -> () {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
     use crate::load_from_api::prepare_test;
+    use std::sync::Arc;
 
     use crate::models::RocksdbClientConstants;
     use crate::utils::create_rocksdb;
@@ -85,7 +102,15 @@ mod test {
         ));
 
         println!("load_from_api");
-        super::load_from_api(&rocksdb, 1705760950, "", "").await.unwrap();
+        super::load_from_api(
+            &rocksdb,
+            0,
+            1706199511,
+            "",
+            "",
+        )
+        .await
+        .unwrap();
         println!("{}", rocksdb.count_not_processed_transactions());
         drop(rocksdb);
         std::fs::remove_dir_all("./raw_transactions").unwrap();
