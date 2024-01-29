@@ -291,7 +291,13 @@ impl RocksdbClient {
         }
     }
 
-    pub fn get_batch_transactions(&self, from_timestamp: u32, processed: bool, capacity: usize) -> Vec<String> {
+    pub fn get_batch_transactions(
+        &self,
+        from_timestamp: u32,
+        to_timestamp: u32,
+        processed: bool,
+        capacity: usize,
+    ) -> Vec<String> {
         let mut from_key = [0_u8; 1 + 4 + 8 + 32];
         from_key[0] = processed as u8;
         from_key[1..5].copy_from_slice(&from_timestamp.to_be_bytes());
@@ -304,16 +310,23 @@ impl RocksdbClient {
                 if key[0] != processed as u8 {
                     return None;
                 }
-                Some(value)
+
+                let mut timestamp_key = [0_u8; 4];
+                timestamp_key.copy_from_slice(&key[1..5]);
+                if u32::from_be_bytes(timestamp_key) < to_timestamp {
+                    return Some(value)
+                }
+
+                None
             })
             .fuse();
 
         let mut transactions = Vec::with_capacity(capacity);
         for (index, value) in iter.enumerate() {
+            transactions.push(base64::encode(&value));
             if index >= capacity - 1 {
                 break;
             }
-            transactions.push(base64::encode(&value));
         }
 
         transactions
