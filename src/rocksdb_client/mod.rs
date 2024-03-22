@@ -185,7 +185,7 @@ impl RocksdbClient {
             .expect("cant update transaction: rocksdb is dead");
     }
 
-    fn update_processed_transactions_to_unprocessed(&self, from_timestamp: u32) {
+    pub fn update_processed_transactions_to_unprocessed(&self, from_timestamp: u32) {
         let mut from_key = [0_u8; 1 + 4 + 8 + 32];
         from_key[0] = true as u8;
         from_key[1..5].copy_from_slice(&from_timestamp.to_be_bytes());

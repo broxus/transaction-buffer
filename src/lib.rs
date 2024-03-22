@@ -1,17 +1,18 @@
 mod cache;
 mod context;
 pub mod drop_base;
+pub mod load_from_api;
 pub mod models;
 pub mod rocksdb_client;
 mod sqlx_client;
 pub mod util_for_local_tests;
 pub mod utils;
-pub mod load_from_api;
 
 use crate::context::BufferContext;
 use crate::models::{BufferedConsumerChannels, BufferedConsumerConfig, RocksdbClientConstants};
+use crate::rocksdb_client::RocksdbClient;
 use crate::utils::{buff_extracted_events, create_rocksdb, timer};
-use chrono::NaiveDateTime;
+use chrono::DateTime;
 use futures::channel::mpsc::{Receiver, Sender};
 use futures::SinkExt;
 use futures::StreamExt;
@@ -23,7 +24,6 @@ use tokio::sync::Notify;
 use tokio::time::sleep;
 use ton_block::Transaction;
 use transaction_consumer::{Offsets, StreamFrom};
-use crate::rocksdb_client::RocksdbClient;
 
 #[allow(clippy::type_complexity)]
 pub fn start_parsing_and_get_channels(config: BufferedConsumerConfig) -> BufferedConsumerChannels {
@@ -130,7 +130,9 @@ async fn sync_kafka(context: &BufferContext, stream_from: StreamFrom) -> Offsets
                 "COMMIT KAFKA {} transactions timestamp_block {} date: {}",
                 count,
                 transaction_time,
-                NaiveDateTime::from_timestamp_opt(transaction_time.into(), 0).unwrap()
+                DateTime::from_timestamp(transaction_time.into(), 0)
+                    .unwrap()
+                    .date_naive()
             );
             count = 0;
             *context.time.write().await = 0;
@@ -172,7 +174,9 @@ async fn realtime_processing_kafka(context: &BufferContext, offsets: Offsets) {
             log::info!(
                 "KAFKA 5_000 transactions timestamp_block {} date: {}",
                 transaction_timestamp,
-                NaiveDateTime::from_timestamp_opt(transaction_timestamp as i64, 0).unwrap()
+                DateTime::from_timestamp(transaction_timestamp as i64, 0)
+                    .unwrap()
+                    .date_naive()
             );
             i = 0;
         }
