@@ -209,15 +209,18 @@ impl RocksdbClient {
             .expect("update_processed_transactions_to_unprocessed ERROR: cant update transactions: rocksdb is dead");
     }
 
-    pub fn iterate_unprocessed_transactions(&self) -> impl Iterator<Item = Transaction> + '_ {
+    pub fn iterate_unprocessed_transactions(
+        &self,
+        last_key: [u8; 45],
+    ) -> impl Iterator<Item = Transaction> + '_ {
         let mut key = [0_u8; 13];
         key[0] = false as u8;
 
         self.transactions
             .iterator(IteratorMode::From(&key, rocksdb::Direction::Forward))
-            .filter_map(|key| {
-                let (key, value) = key.ok()?;
-                if key[0] != false as u8 {
+            .filter_map(move |actual_key| {
+                let (actual_key, value) = actual_key.ok()?;
+                if actual_key[0] != false as u8 || actual_key[1..45] > last_key[1..45] {
                     return None;
                 }
                 Some(Transaction::construct_from_bytes(&value).expect("trust me"))
@@ -225,21 +228,26 @@ impl RocksdbClient {
             .fuse()
     }
 
-    pub fn count_not_processed_transactions(&self) -> usize {
-        let mut key = [0_u8; 13];
+    pub fn count_not_processed_transactions(&self) -> (usize, [u8; 45]) {
+        let mut key = [0_u8; 45];
         key[0] = false as u8;
+        (
+            self.transactions
+                .iterator(IteratorMode::From(&key, rocksdb::Direction::Forward))
+                .filter_map(|last_key| {
+                    let (last_key, _) = last_key.ok()?;
+                    if last_key[0] != false as u8 {
+                        return None;
+                    }
 
-        self.transactions
-            .iterator(IteratorMode::From(&key, rocksdb::Direction::Forward))
-            .filter_map(|key| {
-                let (key, _) = key.ok()?;
-                if key[0] != false as u8 {
-                    return None;
-                }
-                Some(())
-            })
-            .fuse()
-            .count()
+                    key.copy_from_slice(&last_key);
+
+                    Some(())
+                })
+                .fuse()
+                .count(),
+            key,
+        )
     }
 
     pub fn check_drop_base_index(&self) -> StreamFrom {
@@ -314,7 +322,7 @@ impl RocksdbClient {
                 let mut timestamp_key = [0_u8; 4];
                 timestamp_key.copy_from_slice(&key[1..5]);
                 if u32::from_be_bytes(timestamp_key) < to_timestamp {
-                    return Some(value)
+                    return Some(value);
                 }
 
                 None

@@ -16,6 +16,7 @@ pub struct BufferContext {
     pub config: BufferedConsumerConfig,
     pub timestamp_last_block: RwLock<i32>,
     pub notify_for_services: Arc<Notify>,
+    pub is_need_to_save_to_cache: Arc<RwLock<bool>>,
 }
 
 impl BufferContext {
@@ -35,6 +36,7 @@ impl BufferContext {
             config,
             timestamp_last_block,
             notify_for_services,
+            is_need_to_save_to_cache: Arc::new(Default::default()),
         })
     }
 }

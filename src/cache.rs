@@ -9,7 +9,10 @@ pub struct RawCache(RwLock<Vec<Transaction>>);
 
 impl RawCache {
     pub async fn fill_raws(&self, rocksdb: &RocksdbClient) {
-        let raw_transactions = rocksdb.iterate_unprocessed_transactions().collect_vec();
+        let raw_transactions = rocksdb
+            .iterate_unprocessed_transactions([u8::MAX; 45])
+            .collect_vec();
+
         *self.0.write().await = raw_transactions;
     }
 

@@ -161,8 +161,11 @@ async fn realtime_processing_kafka(context: &BufferContext, offsets: Offsets) {
         let transaction_timestamp = transaction.now;
 
         if buff_extracted_events(&transaction, &context.parser).is_some() {
+            let is_need_to_save_to_cache = context.is_need_to_save_to_cache.read().await;
             context.rocksdb.insert_transaction(&transaction);
-            context.raw_cache.insert_raw(transaction).await;
+            if *is_need_to_save_to_cache {
+                context.raw_cache.insert_raw(transaction).await;
+            }
         }
 
         *context.timestamp_last_block.write().await = transaction_timestamp as i32;
@@ -176,7 +179,7 @@ async fn realtime_processing_kafka(context: &BufferContext, offsets: Offsets) {
                 transaction_timestamp,
                 DateTime::from_timestamp(transaction_timestamp as i64, 0)
                     .unwrap()
-                    .date_naive()
+                    .to_string()
             );
             i = 0;
         }
@@ -188,9 +191,24 @@ async fn parse_transaction(
     mut tx: Sender<Vec<(Vec<ExtractedOwned>, Transaction)>>,
     context: Arc<BufferContext>,
 ) {
-    let count_not_processed = context.rocksdb.count_not_processed_transactions();
-    {
-        let transactions_iter = context.rocksdb.iterate_unprocessed_transactions();
+    let (mut count_not_processed, mut last_key) =
+        context.rocksdb.count_not_processed_transactions();
+
+    let mut is_first_iterate = true;
+
+    while count_not_processed >= 10_000 || is_first_iterate {
+        if is_first_iterate {
+            log::info!(
+                "start first from local base iterate, count {}",
+                count_not_processed
+            );
+        } else {
+            log::info!(
+                "start new from local base iterate, count: {}",
+                count_not_processed
+            );
+        }
+        let transactions_iter = context.rocksdb.iterate_unprocessed_transactions(last_key);
 
         let mut i: i64 = 0;
         for transaction in transactions_iter {
@@ -207,12 +225,18 @@ async fn parse_transaction(
                 log::info!("parsing {}/{}", i, count_not_processed);
             }
         }
+        (count_not_processed, last_key) = context.rocksdb.count_not_processed_transactions();
+        is_first_iterate = false;
     }
 
     context.notify_for_services.notify_one();
     log::info!("services notified");
 
-    context.raw_cache.fill_raws(&context.rocksdb).await;
+    {
+        let mut is_need_to_save = context.is_need_to_save_to_cache.write().await;
+        context.raw_cache.fill_raws(&context.rocksdb).await;
+        *is_need_to_save = true;
+    }
 
     loop {
         let transactions = context
