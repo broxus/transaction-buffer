@@ -202,15 +202,13 @@ async fn parse_transaction(
                 "start first from local base iterate, count {}",
                 count_not_processed
             );
+            is_first_iterate = false;
+            sleep(Duration::from_secs(60)).await;
         } else {
             log::info!(
                 "start new from local base iterate, count: {}",
                 count_not_processed
             );
-        }
-        if is_first_iterate {
-            is_first_iterate = false;
-            sleep(Duration::from_secs(60)).await;
         }
 
         let transactions_iter = context.rocksdb.iterate_unprocessed_transactions(last_key);
