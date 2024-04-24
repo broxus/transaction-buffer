@@ -226,7 +226,10 @@ async fn parse_transaction(
             }
         }
         (count_not_processed, last_key) = context.rocksdb.count_not_processed_transactions();
-        is_first_iterate = false;
+        if is_first_iterate {
+            is_first_iterate = false;
+            sleep(Duration::from_secs(60)).await;
+        }
     }
 
     context.notify_for_services.notify_one();
@@ -416,7 +419,7 @@ mod test {
 
         let iter = rocksdb.iterate_unprocessed_transactions(last_key);
         let mut iter_count = 0;
-        for transaction in  iter {
+        for transaction in iter {
             println!("{}", transaction.now);
             iter_count += 1;
         }
