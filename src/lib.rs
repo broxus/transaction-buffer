@@ -208,6 +208,11 @@ async fn parse_transaction(
                 count_not_processed
             );
         }
+        if is_first_iterate {
+            is_first_iterate = false;
+            sleep(Duration::from_secs(60)).await;
+        }
+
         let transactions_iter = context.rocksdb.iterate_unprocessed_transactions(last_key);
 
         let mut i: i64 = 0;
@@ -226,10 +231,6 @@ async fn parse_transaction(
             }
         }
         (count_not_processed, last_key) = context.rocksdb.count_not_processed_transactions();
-        if is_first_iterate {
-            is_first_iterate = false;
-            sleep(Duration::from_secs(60)).await;
-        }
     }
 
     context.notify_for_services.notify_one();
