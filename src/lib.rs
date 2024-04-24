@@ -367,9 +367,63 @@ mod test {
         let tx_1633727491_19509866000001 = "te6ccgECCgEAAk8AA7d3cnyhOFnuOBiS7moENRZdNgUxiJAFUM2wK5Pqa8gcB1AAARvn6h7oG1rdyemhvUA/p0JIRwJlTvMmOOSdIz6eeVBZSAlNVSggAAEb5+g2oFYWC0AwADSAKGzOqAUEAQIbBEdJQJT9osoYgCfKCREDAgBvyYehIEwUWEAAAAAAAAQAAgAAAALzNieYO9rvzc/WHX+rtHOp7kmHMkhC0P8JSDIpGA6i5EBQH0wAnkovrD0JAAAAAAAAAAABMQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgnJV6EBW+f6sFdxvFaCQNe//Q6Dc64NEdA96jHVIXp7O0ghdenSRK8+0C6Heq9+ddTsNtsmPJFo0Z/PXgWHrCzToAgHgCAYBAd8HAPtoAO5PlCcLPccDEl3NQIaiy6bApjESAKoZtgVyfU15A4DrADZeOquWyPdRGZuPzO9Q+0wMQkIfSeqFsYQTWo/agIMbFAlKo+KABhRYYAAAI3z9Q90EwsFoBhbeDvsAAAABgCjegAAAAAAAAAAAAAAteYg9IAAAAAAAgAAAAMABs2gBsvHVXLZHuojM3H5neofaYGISEPpPVC2MIJrUftQEGNkAHcnyhOFnuOBiS7moENRZdNgUxiJAFUM2wK5Pqa8gcB1UCU/aLKAGHHaEAAAjfPyrRoTCwWf0wAkASwHyiPGAHe82lVgNhnVmhrKHoy29N1PckUfIrlkNUVp0V/CWnuzw";
         let tx =
             ton_block::Transaction::construct_from_base64(&tx_1633727491_19509866000001).unwrap();
+
         transactions.push(tx);
 
         transactions
+    }
+
+    fn get_new_test_transactions() -> Vec<Transaction> {
+        let mut transactions = vec![];
+
+        let tx_1713934082_48950625000001 = "te6ccgECDAEAAnMAA7Vz4y6f5R+TCeaFkRSk1DeS8h6q4lsnf0O6Ap9gHjRDc0AAAshTSdWkFh91D1T0dzglSIm6PV6M/NOFmvdYfocSQsaUCKHvtHMwAALIRJ5D3BZiiPAgADRyLBdIBQQBAhEMi4qGG9ZsBEADAgBvyYPQkEwKLCAAAAAAAAIAAAAAAAPlCcjrQ7Iv3oOOFtv7H39cKOCi2/e1VuS8yMFkoL197kBQFowAnUPuAxOIAAAAAAAAAAA0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAgnIZcOlVj8AG3hEQ+Fn4ij4FMV8k/70kE5LYx1i9AEHW1d0dAgRHKmyAGJ+dXSY8hUDRRDZ/oyR61t13BIUhDzMnAgHgCAYBAd8HALVIAHxl0/yj8mE80LIilJqG8l5D1VxLZO/od0BT7APGiG5pABx8hmVTTfqhtFInl6JHVxzBX+KglMLS57U8grETjrRcWFM82ID2wAYKLDAAAFkKaTq0hMxRHgRAAUWIAHxl0/yj8mE80LIilJqG8l5D1VxLZO/od0BT7APGiG5oDAkB4b1QUbc/c4o4IE52m2TQZcniiBmSe2Thg4V0HQsr200Np9x3MSWRxYLkGGOG0LQx79magVaDC4TFaZ0cv7udOYVLz0nUhKBbg3Uinu4UWzRZTZoRfISFcG/b1enRKHS7QoAAAGPDm6cFWYojylM7mRsgCgFlgA4+QzKppv1Q2ikTy9Ejq45gr/FQSmFpc9qeQViJx1ouIAAAAAAAAAAAAAKZ5sQHtgA4CwAA";
+        let tx =
+            ton_block::Transaction::construct_from_base64(&tx_1713934082_48950625000001).unwrap();
+        transactions.push(tx);
+
+        let tx_1713950988_48956872000035= "te6ccgECDgEAAscAA7V8N65ecQtdHZyKqAP5Ap5a53gGbpN9lNL0e1Z3RxcchTAAAshqj3AiMa+CQSJ0QKbgTsfXlgmXeNKep71FNJ2WGF8FVNLUO9VQAALIao9wIfZijRDAADR04kUIBQQBAhcECUvMT0xlmHQc7REDAgBvyYlAKkwYqwAAAAAAAAQAAgAAAAL0nKTTJpMIeq/zCv+1uswTxQb0Kelct+yGJbTCuoLUbEFQNlQAnkUmLD0JAAAAAAAAAAAAywAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgnKdinChXK0nZs5b8Ft+gpT46vdCO5PpNs585QLUxmmpYFFl3Ev/Jfqj44OUaVhKUjTpSXdaQnhe8NSXavTiZpvsAgHgCgYBAd8HAbNoAYb1y84ha6OzkVUAfyBTy1zvAM3Sb7KaXo9qzuji45CnACknNThWKmhVVXmJHWeLk52bSJgC3gA2JHkb5KR8ESpPVLzCJydoBhirKAAAWQ1R7gRIzFGiGMAIAWsZK1GxAAAAAAAAAAAAAAAu+4cbf4AKryr5dOlWO4qJaBA30D4kEVrnMvrpVnblsrDJSDbvNJAJAUOABfulVCCO/UqiOQeKVdeIsJvSUikstVcf6nh+JHQE5+rwDAGzaACq8q+XTpVjuKiWgQN9A+JBFa5zL66VZ25bKwyUg27zSQAw3rl5xC10dnIqoA/kCnlrneAZuk32U0vR7VndHFxyFNS8xPTGWAYU72wAAFkNUe4ERMxRohjACwFrViVIrQAAAAAAAAAAAAAALvuHG3+ABfulVCCO/UqiOQeKVdeIsJvSUikstVcf6nh+JHQE5+rwDAFDgAUw/aA2zSNfIAwnYppmT8hyJwRfhcqSH17RLWntvrlrEA0AEAAAAAAGsOZJ";
+        let tx =
+            ton_block::Transaction::construct_from_base64(&tx_1713950988_48956872000035).unwrap();
+
+        transactions.push(tx);
+
+        transactions
+    }
+
+    #[tokio::test]
+    async fn test_count_last_key_logic() {
+        let mut transactions = get_test_transactions();
+
+        let rocksdb = Arc::new(create_rocksdb(
+            "./raw_transactions",
+            RocksdbClientConstants {
+                drop_base_index: 0,
+                from_timestamp: 0,
+                postgres_base_is_dropped: false,
+            },
+        ));
+
+        let index = Utc::now().timestamp() as u32;
+        rocksdb.check_drop_base_index();
+
+        rocksdb.insert_transactions_with_drain(&mut transactions);
+
+        let (count, last_key) = rocksdb.count_not_processed_transactions();
+        println!("count: {}", count);
+
+        let mut new_transactions = get_new_test_transactions();
+        rocksdb.insert_transactions_with_drain(&mut new_transactions);
+
+        let iter = rocksdb.iterate_unprocessed_transactions(last_key);
+        let mut iter_count = 0;
+        for transaction in  iter {
+            println!("{}", transaction.now);
+            iter_count += 1;
+        }
+
+        drop(rocksdb);
+        std::fs::remove_dir_all("./raw_transactions").unwrap();
+        assert_eq!(iter_count, count);
     }
 
     #[tokio::test]
@@ -390,7 +444,7 @@ mod test {
 
         rocksdb.insert_transactions_with_drain(&mut transactions);
 
-        let iter = rocksdb.iterate_unprocessed_transactions();
+        let iter = rocksdb.iterate_unprocessed_transactions([u8::MAX; 45]);
 
         let mut buff = (0_u32, 0_u64);
         for transaction in iter {
@@ -407,7 +461,7 @@ mod test {
             panic!("not sorted");
         }
 
-        let iter = rocksdb.iterate_unprocessed_transactions();
+        let iter = rocksdb.iterate_unprocessed_transactions([u8::MAX; 45]);
         if iter.count() != 0 {
             panic!("not empty");
         }
@@ -424,7 +478,7 @@ mod test {
 
         rocksdb.insert_transactions_with_drain(&mut transactions);
 
-        let iter = rocksdb.iterate_unprocessed_transactions();
+        let iter = rocksdb.iterate_unprocessed_transactions([u8::MAX; 45]);
         if iter.count() != 0 {
             panic!("not empty");
         }
@@ -452,7 +506,7 @@ mod test {
         rocksdb.insert_transactions_with_drain(&mut transactions);
 
         {
-            let iter = rocksdb.iterate_unprocessed_transactions();
+            let iter = rocksdb.iterate_unprocessed_transactions([u8::MAX; 45]);
 
             for transaction in iter {
                 rocksdb.update_transaction_processed(transaction);
@@ -462,7 +516,7 @@ mod test {
         rocksdb.check_drop_base_index();
 
         {
-            let iter = rocksdb.iterate_unprocessed_transactions();
+            let iter = rocksdb.iterate_unprocessed_transactions([u8::MAX; 45]);
 
             for transaction in iter {
                 println!("now {}, lt {}", transaction.now, transaction.lt);

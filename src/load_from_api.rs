@@ -111,7 +111,7 @@ mod test {
         )
         .await
         .unwrap();
-        println!("{}", rocksdb.count_not_processed_transactions());
+        println!("{}", rocksdb.count_not_processed_transactions().0);
         drop(rocksdb);
         std::fs::remove_dir_all("./raw_transactions").unwrap();
     }
