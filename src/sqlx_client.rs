@@ -110,7 +110,7 @@ pub async fn get_raw_transactions(
     args.add(limit);
 
     sqlx::query_with(GET_AND_UPDATE_RAW_TRANSACTIONS_QUERY, args)
-        .fetch_all(begin)
+        .fetch_all(&mut **begin)
         .await
         .map(|y| {
             y.into_iter()
@@ -267,8 +267,7 @@ pub async fn update_raw_transactions_set_processed_true(
 
 #[cfg(test)]
 mod test {
-    use crate::models::RawTransactionFromDb;
-    use crate::{insert_raw_transactions, update_raw_transactions_set_processed_true};
+    use crate::update_raw_transactions_set_processed_true;
     use sqlx::PgPool;
 
     #[tokio::test]
@@ -277,10 +276,10 @@ mod test {
             .await
             .unwrap();
 
-        let times = (vec![
+        let times = vec![
             (1656071372, 27915771000001_i64),
             (1656070201, 27915328000006),
-        ]);
+        ];
         update_raw_transactions_set_processed_true(&pg_pool, times).await;
     }
 }
