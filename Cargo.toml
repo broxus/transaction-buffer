@@ -6,20 +6,20 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-itertools = "0.11.0"
+itertools = "0.13"
 tokio = { version = "1", features = ["full"] }
 transaction-consumer = { git = "https://github.com/broxus/transaction-consumer" }
-anyhow = "1.0.38"
+anyhow = "1.0"
 chrono = { version = "*" }
 log = { version = "0.4", features = ["std", "serde"] }
 ton_types = { git = "https://github.com/broxus/ton-labs-types" }
 ton_block = { git = "https://github.com/broxus/ton-labs-block.git" }
 futures = { version = "0.3" }
-sqlx = { version = "0.6.2", features = ["runtime-tokio-native-tls", "postgres", "uuid", "offline", "chrono", "json"] }
+sqlx = { version = "0.7.4", features = ["runtime-tokio-native-tls", "postgres", "uuid", "chrono", "json"] }
 nekoton-abi = { git = "https://github.com/broxus/nekoton.git" }
 ton_abi = { git = "https://github.com/broxus/ton-labs-abi.git" }
 
 [dev-dependencies]
-env_logger = "0.10.0"
+env_logger = "0.11"
 env-file-reader = "0.3.0"
 

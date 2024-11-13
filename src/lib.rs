@@ -12,7 +12,7 @@ use crate::sqlx_client::{
     get_count_raw_transactions, get_raw_transactions, insert_raw_transaction,
     insert_raw_transactions, update_raw_transactions_set_processed_true,
 };
-use chrono::NaiveDateTime;
+use chrono::DateTime;
 use futures::channel::mpsc::{Receiver, Sender};
 use futures::SinkExt;
 use futures::StreamExt;
@@ -214,7 +214,7 @@ async fn parse_kafka_transactions(
                 "COMMIT KAFKA {} transactions timestamp_block {} date: {}",
                 count,
                 transaction_time,
-                NaiveDateTime::from_timestamp_opt(transaction_time, 0).unwrap()
+                DateTime::from_timestamp(transaction_time, 0).unwrap()
             );
             count = 0;
             *time.write().await = 0;
@@ -279,7 +279,7 @@ async fn parse_kafka_transactions(
             log::info!(
                 "KAFKA 5_000 transactions timestamp_block {} date: {}",
                 transaction_timestamp,
-                NaiveDateTime::from_timestamp_opt(transaction_timestamp as i64, 0).unwrap()
+                DateTime::from_timestamp(transaction_timestamp as i64, 0).unwrap()
             );
             i = 0;
         }
@@ -345,13 +345,7 @@ async fn parse_raw_transaction(
         for raw_transaction_from_db in raw_transactions_from_db {
             i += 1;
 
-            let raw_transaction = match RawTransaction::try_from(raw_transaction_from_db) {
-                Ok(ok) => ok,
-                Err(e) => {
-                    log::error!("{}", e);
-                    continue;
-                }
-            };
+            let raw_transaction = RawTransaction::from(raw_transaction_from_db);
 
             if let Some(events) = buff_extracted_events(&raw_transaction.data, &parser) {
                 send_message.push((events, raw_transaction.clone()));
@@ -493,9 +487,9 @@ pub fn get_exit_code(transaction: &Transaction) -> Option<i32> {
 
 #[cfg(test)]
 mod test {
-    use crate::{extract_events, filter_extracted};
+    use crate::filter_extracted;
     use nekoton_abi::TransactionParser;
-    use ton_block::{Deserializable, GetRepresentationHash};
+    use ton_block::Deserializable;
 
     #[test]
     fn test_empty() {
@@ -507,12 +501,12 @@ mod test {
 
         let funs = abi.functions.values().cloned().collect::<Vec<_>>();
         let parser = TransactionParser::builder()
-            .function_in_list(&funs, false)
-            .functions_out_list(&funs, false)
+            .function_in_list(funs.clone(), false)
+            .functions_out_list(funs, false)
             .build()
             .unwrap();
         let test = parser.parse(&tx).unwrap();
-        let test1 = filter_extracted(test, tx.hash().unwrap(), tx.clone()).unwrap();
+        let test1 = filter_extracted(test, tx.clone()).unwrap();
         dbg!(test1);
     }
 }
