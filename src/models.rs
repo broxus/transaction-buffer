@@ -23,6 +23,7 @@ pub struct BufferedConsumerConfig {
     pub rocksdb_drop_base_index: u32,
     pub parsing_from_timestamp: Option<u32>,
     pub postgres_base_is_dropped: Option<bool>,
+    pub transactions_logger_counter: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +44,8 @@ impl BufferedConsumerConfig {
         rocksdb_drop_base_index: u32,
         parsing_from_timestamp: Option<u32>,
         postgres_base_is_dropped: Option<bool>,
+        transactions_logger_counter: i32,
+
     ) -> Self {
         Self {
             transaction_consumer,
@@ -54,6 +57,7 @@ impl BufferedConsumerConfig {
             rocksdb_drop_base_index,
             parsing_from_timestamp,
             postgres_base_is_dropped,
+            transactions_logger_counter,
         }
     }
 }

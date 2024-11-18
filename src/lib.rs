@@ -80,7 +80,7 @@ async fn parse_kafka_transactions(
     }
 
     let stream_from = context.rocksdb.check_drop_base_index();
-
+    log::info!("rocksdb index checked");
     let offsets = sync_kafka(&context, stream_from).await;
     log::info!("kafka synced");
 
@@ -94,12 +94,14 @@ async fn parse_kafka_transactions(
 
 async fn sync_kafka(context: &BufferContext, stream_from: StreamFrom) -> Offsets {
     let from_timestamp = context.config.parsing_from_timestamp.unwrap_or_default() as i32;
+    log::info!("prepare get kafka stream");
     let (mut stream_transactions, offsets) = context
         .config
         .transaction_consumer
         .stream_until_highest_offsets(stream_from)
         .await
         .expect("cant get highest offsets stream transactions");
+    log::info!("kafka stream is ready");
 
     let mut count = 0;
     let mut transactions = vec![];
@@ -173,9 +175,10 @@ async fn realtime_processing_kafka(context: &BufferContext, offsets: Offsets) {
 
         produced_transaction.commit().expect("dead stream kafka");
 
-        if i >= 5_000 {
+        if i >= context.transactions_logger_counter {
             log::info!(
-                "KAFKA 5_000 transactions timestamp_block {} date: {}",
+                "KAFKA {} transactions timestamp_block {} date: {}",
+                context.transactions_logger_counter,
                 transaction_timestamp,
                 DateTime::from_timestamp(transaction_timestamp as i64, 0)
                     .unwrap()

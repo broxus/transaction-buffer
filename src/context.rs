@@ -17,10 +17,15 @@ pub struct BufferContext {
     pub timestamp_last_block: RwLock<i32>,
     pub notify_for_services: Arc<Notify>,
     pub is_need_to_save_to_cache: Arc<RwLock<bool>>,
+    pub transactions_logger_counter: i32,
 }
 
 impl BufferContext {
-    pub fn new(config: BufferedConsumerConfig, notify_for_services: Arc<Notify>, rocksdb: Arc<RocksdbClient>) -> Arc<Self> {
+    pub fn new(
+        config: BufferedConsumerConfig,
+        notify_for_services: Arc<Notify>,
+        rocksdb: Arc<RocksdbClient>,
+    ) -> Arc<Self> {
         let raw_cache = RawCache::default();
         let time = RwLock::new(0);
         let parser =
@@ -29,6 +34,7 @@ impl BufferContext {
         let timestamp_last_block = RwLock::new(0_i32);
 
         Arc::new(Self {
+            transactions_logger_counter: config.transactions_logger_counter,
             rocksdb,
             raw_cache,
             time,
