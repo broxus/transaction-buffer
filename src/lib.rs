@@ -152,7 +152,7 @@ async fn realtime_processing_kafka(context: &BufferContext, offsets: Offsets) {
     let mut stream_transactions = context
         .config
         .transaction_consumer
-        .stream_transactions(StreamFrom::Offsets(offsets))
+        .stream_with_manual_commit(offsets)
         .await
         .expect("cant get stream transactions");
 
@@ -173,8 +173,12 @@ async fn realtime_processing_kafka(context: &BufferContext, offsets: Offsets) {
         *context.timestamp_last_block.write().await = transaction_timestamp as i32;
         *context.time.write().await = 0;
 
+        produced_transaction
+            .message
+            .store_offset(&context.config.transaction_consumer.topic)
+            .expect("dead stream kafka");
+
         if i >= context.transactions_logger_counter {
-            produced_transaction.commit().expect("dead stream kafka");
             log::info!(
                 "KAFKA {} transactions timestamp_block {} date: {}",
                 context.transactions_logger_counter,
