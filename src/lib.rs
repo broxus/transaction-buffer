@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Notify, RwLock};
 use tokio::time::sleep;
-use ton_block::{MsgAddressInt, TrComputePhase, Transaction};
+use ton_block::{TrComputePhase, Transaction};
 use transaction_consumer::StreamFrom;
 
 pub fn split_any_extractable(
@@ -179,7 +179,7 @@ async fn parse_kafka_transactions(
 
     let (mut stream_transactions, offsets) = config
         .transaction_consumer
-        .stream_until_highest_offsets(stream_from)
+        .stream_until_highest_offsets_with_manual_commit(stream_from)
         .await
         .expect("cant get highest offsets stream transactions");
 
@@ -206,12 +206,15 @@ async fn parse_kafka_transactions(
                     .expect("cant insert raw_transactions: rip db");
             }
 
-            if let Err(e) = produced_transaction.commit() {
-                log::error!("cant commit kafka, stream is down. ERROR {}", e);
+            if let Err(e) = produced_transaction
+                .message
+                .store_offset(&config.transaction_consumer.topic)
+            {
+                log::error!("cant store offset kafka, stream is down. ERROR {}", e);
             }
 
             log::info!(
-                "COMMIT KAFKA {} transactions timestamp_block {} date: {}",
+                "STORE OFFSET IN KAFKA {} transactions timestamp_block {} date: {}",
                 count,
                 transaction_time,
                 DateTime::from_timestamp(transaction_time, 0).unwrap()
@@ -252,7 +255,7 @@ async fn parse_kafka_transactions(
     let mut i = 0;
     let mut stream_transactions = config
         .transaction_consumer
-        .stream_transactions(StreamFrom::Offsets(offsets))
+        .stream_with_manual_commit(offsets)
         .await
         .expect("cant get stream transactions");
 
@@ -273,7 +276,12 @@ async fn parse_kafka_transactions(
         *timestamp_last_block.write().await = transaction_timestamp as i32;
         *time.write().await = 0;
 
-        produced_transaction.commit().expect("dead stream kafka");
+        if let Err(e) = produced_transaction
+            .message
+            .store_offset(&config.transaction_consumer.topic)
+        {
+            log::error!("cant store offset kafka, stream is down. ERROR {}", e);
+        }
 
         if i >= 5_000 {
             log::info!(
@@ -293,13 +301,13 @@ fn check_failed_transactions(config: &BufferedConsumerConfig, transaction: &Tran
         .and_then(|im_cell| im_cell.read_struct().ok())
         .and_then(|in_msg| in_msg.src());
 
-    let account_addr =
-        MsgAddressInt::with_standart(None, 0, transaction.account_addr.clone()).unwrap_or_default();
     if config
         .save_failed_transactions_for_accounts
-        .contains(&account_addr)
-        || src.map_or(false, |s| {
-            config.save_failed_transactions_for_accounts.contains(&s)
+        .contains(&transaction.account_addr)
+        || src.is_some_and(|s| {
+            config
+                .save_failed_transactions_for_accounts
+                .contains(&s.address())
         })
     {
         if let Some(exit_code) = get_exit_code(transaction) {
