@@ -183,9 +183,7 @@ async fn realtime_processing_kafka(context: &BufferContext, offsets: Offsets) {
                 "KAFKA {} transactions timestamp_block {} date: {}",
                 context.transactions_logger_counter,
                 transaction_timestamp,
-                DateTime::from_timestamp(transaction_timestamp as i64, 0)
-                    .unwrap()
-                    .to_string()
+                DateTime::from_timestamp(transaction_timestamp as i64, 0).unwrap()
             );
             i = 0;
         }

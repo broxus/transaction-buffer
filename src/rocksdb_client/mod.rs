@@ -321,23 +321,10 @@ impl RocksdbClient {
 
                 let mut timestamp_key = [0_u8; 4];
                 timestamp_key.copy_from_slice(&key[1..5]);
-                if u32::from_be_bytes(timestamp_key) < to_timestamp {
-                    return Some(value);
-                }
+                (u32::from_be_bytes(timestamp_key) < to_timestamp).then_some(value)
+            });
 
-                None
-            })
-            .fuse();
-
-        let mut transactions = Vec::with_capacity(capacity);
-        for (index, value) in iter.enumerate() {
-            transactions.push(base64::encode(&value));
-            if index >= capacity - 1 {
-                break;
-            }
-        }
-
-        transactions
+        iter.take(capacity).map(base64::encode).collect()
     }
 }
 
