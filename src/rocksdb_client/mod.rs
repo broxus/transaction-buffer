@@ -1,7 +1,7 @@
 use crate::models::RocksdbClientConstants;
 use anyhow::{Context, Result};
 use std::path::PathBuf;
-use ton_block::{Deserializable, Serializable, Transaction};
+use ton_block::{Deserializable, MsgAddressInt, Serializable, Transaction};
 use transaction_consumer::StreamFrom;
 use weedb::rocksdb::{IteratorMode, WriteBatchWithTransaction};
 use weedb::{rocksdb, Caches, Migrations, Semver, Table, WeeDb};
@@ -44,16 +44,12 @@ impl RocksdbClient {
     const DB_VERSION: Semver = [0, 1, 0];
 
     pub fn new(config: &RocksdbClientConfig) -> Result<Self> {
-        let limit = match fdlimit::raise_fd_limit() {
-            // New fd limit
-            Some(limit) => limit,
-            // Current soft limit
-            None => {
-                rlimit::getrlimit(rlimit::Resource::NOFILE)
-                    .unwrap_or((256, 0))
-                    .0
-            }
-        };
+        let limit = fdlimit::raise_fd_limit().unwrap_or_else(|| {
+            rlimit::getrlimit(rlimit::Resource::NOFILE)
+                .unwrap_or((256, 0))
+                .0
+        });
+
         let options = &config.persistent_db_options;
 
         let caches_capacity =
@@ -325,6 +321,35 @@ impl RocksdbClient {
             });
 
         iter.take(capacity).map(base64::encode).collect()
+    }
+
+    pub fn get_transaction(
+        &self,
+        timestamp: u32,
+        timestamp_lt: u64,
+        account: &MsgAddressInt,
+    ) -> Option<Transaction> {
+        let mut key = [0_u8; 1 + 4 + 8 + 32];
+        key[0] = true as u8;
+        key[1..5].copy_from_slice(&timestamp.to_be_bytes());
+        key[5..13].copy_from_slice(&timestamp_lt.to_be_bytes());
+        key[13..].copy_from_slice(&account.address().get_bytestring_on_stack(0));
+
+        if let Some(transaction) = self
+            .transactions
+            .get(key)
+            .ok()?
+            .map(|value| Transaction::construct_from_bytes(&value).expect("trust me"))
+        {
+            return Some(transaction);
+        }
+
+        key[0] = false as u8;
+
+        self.transactions
+            .get(key)
+            .ok()?
+            .map(|value| Transaction::construct_from_bytes(&value).expect("trust me"))
     }
 }
 
