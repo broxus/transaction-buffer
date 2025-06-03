@@ -24,6 +24,7 @@ pub struct BufferedConsumerConfig {
     pub parsing_from_timestamp: Option<u32>,
     pub postgres_base_is_dropped: Option<bool>,
     pub transactions_logger_counter: i32,
+    pub first_iterate_delay: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -45,7 +46,7 @@ impl BufferedConsumerConfig {
         parsing_from_timestamp: Option<u32>,
         postgres_base_is_dropped: Option<bool>,
         transactions_logger_counter: i32,
-
+        first_iterate_delay: Option<i32>,
     ) -> Self {
         Self {
             transaction_consumer,
@@ -58,6 +59,7 @@ impl BufferedConsumerConfig {
             parsing_from_timestamp,
             postgres_base_is_dropped,
             transactions_logger_counter,
+            first_iterate_delay,
         }
     }
 }

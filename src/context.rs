@@ -18,6 +18,7 @@ pub struct BufferContext {
     pub notify_for_services: Arc<Notify>,
     pub is_need_to_save_to_cache: Arc<RwLock<bool>>,
     pub transactions_logger_counter: i32,
+    pub first_iterate_delay: Option<i32>,
 }
 
 impl BufferContext {
@@ -34,6 +35,7 @@ impl BufferContext {
         let timestamp_last_block = RwLock::new(0_i32);
 
         Arc::new(Self {
+            first_iterate_delay: config.first_iterate_delay,
             transactions_logger_counter: config.transactions_logger_counter,
             rocksdb,
             raw_cache,

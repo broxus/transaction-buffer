@@ -207,7 +207,10 @@ async fn parse_transaction(
                 count_not_processed
             );
             is_first_iterate = false;
-            sleep(Duration::from_secs(60)).await;
+            sleep(Duration::from_secs(
+                context.first_iterate_delay.unwrap_or(60) as u64,
+            ))
+            .await;
         } else {
             log::info!(
                 "start new from local base iterate, count: {}",
