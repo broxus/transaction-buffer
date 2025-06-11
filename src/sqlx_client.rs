@@ -87,11 +87,11 @@ pub async fn insert_raw_transaction(
     pg_pool: &Pool<Postgres>,
 ) -> Result<()> {
     let mut args = PgArguments::default();
-    args.add(raw_transaction.transaction);
-    args.add(raw_transaction.transaction_hash);
-    args.add(raw_transaction.timestamp_block);
-    args.add(raw_transaction.timestamp_lt);
-    args.add(raw_transaction.processed);
+    _ = args.add(raw_transaction.transaction);
+    _ = args.add(raw_transaction.transaction_hash);
+    _ = args.add(raw_transaction.timestamp_block);
+    _ = args.add(raw_transaction.timestamp_lt);
+    _ = args.add(raw_transaction.processed);
 
     sqlx::query_with(INSERT_RAW_TRANSACTION_QUERY, args)
         .execute(pg_pool)
@@ -106,8 +106,8 @@ pub async fn get_raw_transactions(
     begin: &mut Transaction<'_, Postgres>,
 ) -> Result<Vec<RawTransactionFromDb>> {
     let mut args = PgArguments::default();
-    args.add(timestamp_block_lt);
-    args.add(limit);
+    _ = args.add(timestamp_block_lt);
+    _ = args.add(limit);
 
     sqlx::query_with(GET_AND_UPDATE_RAW_TRANSACTIONS_QUERY, args)
         .fetch_all(&mut **begin)
@@ -254,8 +254,8 @@ pub async fn update_raw_transactions_set_processed_true(
             });
 
     let mut args = PgArguments::default();
-    args.add(timestamp_blocks);
-    args.add(timestamp_lts);
+    _ = args.add(timestamp_blocks);
+    _ = args.add(timestamp_lts);
 
     if let Err(e) = sqlx::query_with(UPDATE_RAW_TRANSACTIONS_PROCESSED_TRUE_QUERY, args)
         .execute(pg_pool)
