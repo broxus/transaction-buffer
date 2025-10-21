@@ -11,6 +11,8 @@ pub struct RocksdbClientConstants {
     pub drop_base_index: u32,
     pub from_timestamp: u32,
     pub postgres_base_is_dropped: bool,
+    // if true - kafka offset always beginner
+    pub is_new_kafka: bool,
 }
 
 pub struct BufferedConsumerConfig {
@@ -25,6 +27,7 @@ pub struct BufferedConsumerConfig {
     pub postgres_base_is_dropped: Option<bool>,
     pub transactions_logger_counter: i32,
     pub first_iterate_delay: Option<i32>,
+    pub is_new_kafka: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +50,7 @@ impl BufferedConsumerConfig {
         postgres_base_is_dropped: Option<bool>,
         transactions_logger_counter: i32,
         first_iterate_delay: Option<i32>,
+        is_new_kafka: Option<bool>,
     ) -> Self {
         Self {
             transaction_consumer,
@@ -60,6 +64,7 @@ impl BufferedConsumerConfig {
             postgres_base_is_dropped,
             transactions_logger_counter,
             first_iterate_delay,
+            is_new_kafka,
         }
     }
 }

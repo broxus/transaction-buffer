@@ -16,6 +16,7 @@ pub fn test_from_local_transactions(config: BufferedConsumerConfig) -> BufferedC
             drop_base_index: config.rocksdb_drop_base_index,
             from_timestamp: config.parsing_from_timestamp.unwrap_or_default(),
             postgres_base_is_dropped: config.postgres_base_is_dropped.unwrap_or_default(),
+            is_new_kafka: config.is_new_kafka.unwrap_or(false),
         },
     ));
 

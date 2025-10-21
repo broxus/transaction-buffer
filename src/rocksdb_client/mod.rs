@@ -247,6 +247,11 @@ impl RocksdbClient {
     }
 
     pub fn check_drop_base_index(&self) -> StreamFrom {
+        if self.constants.is_new_kafka {
+            log::info!("This is new kafka, start from beginning");
+
+            return StreamFrom::Beginning;
+        }
         let mut key = [0_u8; 4];
         key.copy_from_slice(&self.constants.drop_base_index.to_be_bytes());
 
