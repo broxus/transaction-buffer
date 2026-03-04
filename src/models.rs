@@ -1,10 +1,10 @@
+use crate::rocksdb_client::RocksdbClient;
 use futures::channel::mpsc::{Receiver, Sender};
 use nekoton_abi::transaction_parser::ExtractedOwned;
 use std::sync::Arc;
 use tokio::sync::Notify;
 use ton_block::Transaction;
 use transaction_consumer::TransactionConsumer;
-use crate::rocksdb_client::RocksdbClient;
 
 #[derive(Debug, Clone)]
 pub struct RocksdbClientConstants {

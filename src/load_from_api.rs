@@ -3,6 +3,11 @@ use ton_block::{Deserializable, Transaction};
 
 use crate::rocksdb_client::RocksdbClient;
 
+#[tracing::instrument(
+    level = "info",
+    skip(rocksdb_client, api_key),
+    fields(from_timestamp, to_timestamp, url_api = %url_api)
+)]
 pub async fn load_from_api(
     rocksdb_client: &RocksdbClient,
     from_timestamp: u32,
@@ -13,7 +18,7 @@ pub async fn load_from_api(
     let client = reqwest::Client::new();
     let mut is_processed = false;
 
-    log::info!("start load from api");
+    tracing::info!("start load from api");
     let mut count_inserted = 0;
     let mut from_timestamp_request = from_timestamp;
     let mut last_timestamp_lt = 0;
@@ -48,41 +53,17 @@ pub async fn load_from_api(
             }
         }
 
-        log::info!("insert transactions len {}", transactions.len());
+        tracing::info!(batch_len = transactions.len(), "insert transactions");
         count_inserted += transactions.len();
         rocksdb_client.insert_transactions_with_drain(&mut transactions);
-        log::info!("count inserted transactions {}", count_inserted);
+        tracing::info!(count_inserted, "count inserted transactions");
     }
 
     Ok(())
 }
 
 #[cfg(test)]
-fn prepare_test(level_filter: log::LevelFilter) -> () {
-    use env_logger::Builder;
-    use std::io::Write;
-    use std::str::FromStr;
-
-    Builder::new()
-        .format(|buf, record| {
-            writeln!(
-                buf,
-                "{} {}/{} {} [{}] - {}",
-                chrono::Local::now().format("%Y-%m-%dT%H:%M:%S"),
-                record.module_path().unwrap_or_default(),
-                record.file().unwrap_or_default(),
-                record.line().unwrap_or_default(),
-                record.level(),
-                record.args(),
-            )
-        })
-        .filter(Some("transaction_buffer"), level_filter)
-        .init();
-}
-
-#[cfg(test)]
 mod test {
-    use crate::load_from_api::prepare_test;
     use std::sync::Arc;
 
     use crate::models::RocksdbClientConstants;
@@ -90,7 +71,6 @@ mod test {
 
     #[tokio::test]
     async fn test_load_from_api() {
-        prepare_test(log::LevelFilter::Debug);
         println!("test_load_from_api");
         let rocksdb = Arc::new(create_rocksdb(
             "./raw_transactions",
@@ -98,19 +78,14 @@ mod test {
                 drop_base_index: 0,
                 from_timestamp: 0,
                 postgres_base_is_dropped: false,
+                is_new_kafka: false,
             },
         ));
 
         println!("load_from_api");
-        super::load_from_api(
-            &rocksdb,
-            0,
-            1706199511,
-            "",
-            "",
-        )
-        .await
-        .unwrap();
+        super::load_from_api(&rocksdb, 0, 1706199511, "", "")
+            .await
+            .unwrap();
         println!("{}", rocksdb.count_not_processed_transactions().0);
         drop(rocksdb);
         std::fs::remove_dir_all("./raw_transactions").unwrap();

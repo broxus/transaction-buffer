@@ -246,9 +246,19 @@ impl RocksdbClient {
         )
     }
 
+    #[tracing::instrument(
+        level = "info",
+        skip(self),
+        fields(
+            drop_base_index = self.constants.drop_base_index,
+            from_timestamp = self.constants.from_timestamp,
+            postgres_base_is_dropped = self.constants.postgres_base_is_dropped,
+            is_new_kafka = self.constants.is_new_kafka,
+        )
+    )]
     pub fn check_drop_base_index(&self) -> StreamFrom {
         if self.constants.is_new_kafka {
-            log::info!("This is new kafka, start from beginning");
+            tracing::info!("this is new kafka, start from beginning");
 
             return StreamFrom::Beginning;
         }
@@ -262,7 +272,10 @@ impl RocksdbClient {
         {
             true => {
                 if self.constants.postgres_base_is_dropped {
-                    log::info!("postgres db is dropped, update processed transactions to unprocessed, from_timestamp: {}", self.constants.from_timestamp);
+                    tracing::info!(
+                        from_timestamp = self.constants.from_timestamp,
+                        "postgres db is dropped, update processed transactions to unprocessed",
+                    );
                     self.update_processed_transactions_to_unprocessed(
                         self.constants.from_timestamp,
                     );
@@ -270,7 +283,7 @@ impl RocksdbClient {
                 StreamFrom::Stored
             }
             false => {
-                log::info!("drop rocksdb all transactions");
+                tracing::info!("drop rocksdb all transactions");
                 let mut batch = WriteBatchWithTransaction::<false>::default();
 
                 batch.delete_range_cf(

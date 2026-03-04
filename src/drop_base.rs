@@ -4,6 +4,7 @@ use crate::sqlx_client::{
 use sqlx::{Pool, Postgres};
 
 // return is dropped
+#[tracing::instrument(level = "info", skip(pg_pool), fields(drop_index))]
 pub async fn check_base(pg_pool: &Pool<Postgres>, drop_index: i32) -> bool {
     if let Ok(x) = get_drop_index(pg_pool).await {
         if x != drop_index {

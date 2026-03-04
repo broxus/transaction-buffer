@@ -43,15 +43,17 @@ $$
     END
 $$;";
 
+#[tracing::instrument(level = "debug", skip(pg_pool))]
 pub async fn create_drop_index_table(pg_pool: &Pool<Postgres>) {
     if let Err(e) = sqlx::query(CREATE_TABLE_DROP_BASE_INDEX_QUERY)
         .execute(pg_pool)
         .await
     {
-        log::error!("create table drop_index ERROR {}", e);
+        tracing::error!(error = ?e, "create table drop_index failed");
     }
 }
 
+#[tracing::instrument(level = "debug", skip(pg_pool))]
 pub async fn get_drop_index(pg_pool: &Pool<Postgres>) -> Result<i32, anyhow::Error> {
     let index: i32 = sqlx::query(SELECT_DROP_BASE_INDEX_QUERY)
         .fetch_one(pg_pool)
@@ -60,24 +62,27 @@ pub async fn get_drop_index(pg_pool: &Pool<Postgres>) -> Result<i32, anyhow::Err
     Ok(index)
 }
 
+#[tracing::instrument(level = "debug", skip(pg_pool), fields(index))]
 pub async fn insert_drop_index(pg_pool: &Pool<Postgres>, index: i32) {
     if let Err(e) = sqlx::query(INSERT_DROP_BASE_INDEX_QUERY)
         .bind(index)
         .execute(pg_pool)
         .await
     {
-        log::error!("insert index drop ERROR {}", e);
+        tracing::error!(error = ?e, "insert drop index failed");
     }
 }
 
+#[tracing::instrument(level = "debug", skip(pg_pool))]
 pub async fn drop_tables(pg_pool: &Pool<Postgres>) {
     if let Err(e) = sqlx::query(DROP_TABLES_QUERY).execute(pg_pool).await {
-        log::error!("drop tables ERROR {}", e);
+        tracing::error!(error = ?e, "drop tables failed");
     }
 }
 
+#[tracing::instrument(level = "debug", skip(pg_pool))]
 pub async fn drop_functions(pg_pool: &Pool<Postgres>) {
     if let Err(e) = sqlx::query(DROP_FUNCTIONS_QUERY).execute(pg_pool).await {
-        log::error!("drop functions ERROR {}", e);
+        tracing::error!(error = ?e, "drop functions failed");
     }
 }
