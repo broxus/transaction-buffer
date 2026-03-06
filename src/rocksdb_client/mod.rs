@@ -34,6 +34,12 @@ pub struct RocksdbClient {
 }
 
 #[derive(Debug, Clone)]
+pub struct DropBaseCheckResult {
+    pub stream_from: StreamFrom,
+    pub was_rocksdb_dropped: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct RocksdbClientConfig {
     pub persistent_db_path: PathBuf,
     pub persistent_db_options: DbOptions,
@@ -257,10 +263,27 @@ impl RocksdbClient {
         )
     )]
     pub fn check_drop_base_index(&self) -> StreamFrom {
+        self.check_drop_base_index_detailed().stream_from
+    }
+
+    #[tracing::instrument(
+        level = "info",
+        skip(self),
+        fields(
+            drop_base_index = self.constants.drop_base_index,
+            from_timestamp = self.constants.from_timestamp,
+            postgres_base_is_dropped = self.constants.postgres_base_is_dropped,
+            is_new_kafka = self.constants.is_new_kafka,
+        )
+    )]
+    pub fn check_drop_base_index_detailed(&self) -> DropBaseCheckResult {
         if self.constants.is_new_kafka {
             tracing::info!("this is new kafka, start from beginning");
 
-            return StreamFrom::Beginning;
+            return DropBaseCheckResult {
+                stream_from: StreamFrom::Beginning,
+                was_rocksdb_dropped: false,
+            };
         }
         let mut key = [0_u8; 4];
         key.copy_from_slice(&self.constants.drop_base_index.to_be_bytes());
@@ -280,7 +303,10 @@ impl RocksdbClient {
                         self.constants.from_timestamp,
                     );
                 }
-                StreamFrom::Stored
+                DropBaseCheckResult {
+                    stream_from: StreamFrom::Stored,
+                    was_rocksdb_dropped: false,
+                }
             }
             false => {
                 tracing::info!("drop rocksdb all transactions");
@@ -308,7 +334,10 @@ impl RocksdbClient {
                     .put_cf(&self.drop_base_index.cf(), key, [])
                     .expect("cant put drop_base_index: rocksdb is dead");
 
-                StreamFrom::Beginning
+                DropBaseCheckResult {
+                    stream_from: StreamFrom::Beginning,
+                    was_rocksdb_dropped: true,
+                }
             }
         }
     }

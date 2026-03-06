@@ -28,12 +28,22 @@ pub struct BufferedConsumerConfig {
     pub transactions_logger_counter: i32,
     pub first_iterate_delay: Option<i32>,
     pub is_new_kafka: Option<bool>,
+    pub archive_node_config: Option<ArchiveNodeConfig>,
 }
 
 #[derive(Debug, Clone)]
 pub enum AnyExtractable {
     Event(ton_abi::Event),
     Function(ton_abi::Function),
+}
+
+#[derive(Debug, Clone)]
+pub struct ArchiveNodeConfig {
+    pub access_key: String,
+    pub secret_key: String,
+    pub endpoint: String,
+    pub region: String,
+    pub bucket: String,
 }
 
 impl BufferedConsumerConfig {
@@ -51,6 +61,7 @@ impl BufferedConsumerConfig {
         transactions_logger_counter: i32,
         first_iterate_delay: Option<i32>,
         is_new_kafka: Option<bool>,
+        archive_node_config: Option<ArchiveNodeConfig>,
     ) -> Self {
         Self {
             transaction_consumer,
@@ -65,6 +76,7 @@ impl BufferedConsumerConfig {
             transactions_logger_counter,
             first_iterate_delay,
             is_new_kafka,
+            archive_node_config,
         }
     }
 }

@@ -1,7 +1,9 @@
+mod archive_node_client;
 mod cache;
 mod context;
 pub mod drop_base;
 pub mod load_from_api;
+pub mod load_from_s3;
 pub mod models;
 pub mod rocksdb_client;
 mod sqlx_client;
@@ -12,6 +14,7 @@ use crate::context::BufferContext;
 use crate::models::{BufferedConsumerChannels, BufferedConsumerConfig, RocksdbClientConstants};
 use crate::rocksdb_client::RocksdbClient;
 use crate::utils::{buff_extracted_events, create_rocksdb, timer};
+use archive_node_client::sync_from_genesis_until_day_ago;
 use chrono::DateTime;
 use futures::channel::mpsc::{Receiver, Sender};
 use futures::SinkExt;
@@ -44,6 +47,7 @@ pub fn start_parsing_and_get_channels(config: BufferedConsumerConfig) -> Buffere
         parsing_from_timestamp = config.parsing_from_timestamp.unwrap_or_default(),
         postgres_base_is_dropped = config.postgres_base_is_dropped.unwrap_or_default(),
         is_new_kafka = config.is_new_kafka.unwrap_or(false),
+        archive_node_enabled = config.archive_node_config.is_some(),
     );
     let rocksdb = Arc::new(create_rocksdb(
         &config.rocksdb_path,
@@ -104,6 +108,7 @@ pub fn start_parsing_and_get_channels(config: BufferedConsumerConfig) -> Buffere
             cache_timer = config.cache_timer,
             parsing_from_timestamp = config.parsing_from_timestamp.unwrap_or_default(),
             is_new_kafka = config.is_new_kafka.unwrap_or(false),
+            archive_node_enabled = config.archive_node_config.is_some(),
         )
     )
 )]
@@ -129,9 +134,46 @@ async fn parse_kafka_transactions(
         tokio::spawn(timer(context).instrument(span));
     }
 
-    let stream_from = context.rocksdb.check_drop_base_index();
-    tracing::info!(?stream_from, "rocksdb index checked");
-    let offsets = sync_kafka(&context, stream_from).await;
+    let drop_base_check = context.rocksdb.check_drop_base_index_detailed();
+    tracing::info!(stream_from = ?drop_base_check.stream_from, was_rocksdb_dropped = drop_base_check.was_rocksdb_dropped, "rocksdb index checked");
+
+    let mut archive_max_timestamp = None;
+    if drop_base_check.was_rocksdb_dropped {
+        if let Some(archive_node_config) = &context.config.archive_node_config {
+            tracing::info!("start archive sync from genesis until one day ago");
+            archive_max_timestamp = Some(
+                sync_from_genesis_until_day_ago(
+                    &context.rocksdb,
+                    &context.parser,
+                    archive_node_config,
+                )
+                .await
+                .expect("archive sync failed"),
+            )
+            .flatten();
+            tracing::info!(
+                archive_max_timestamp = archive_max_timestamp.unwrap_or_default(),
+                "archive sync completed"
+            );
+        }
+    }
+
+    let effective_from_timestamp = context
+        .config
+        .parsing_from_timestamp
+        .unwrap_or_default()
+        .max(archive_max_timestamp.unwrap_or_default());
+    tracing::info!(
+        effective_from_timestamp,
+        "calculated kafka sync from timestamp"
+    );
+
+    let offsets = sync_kafka(
+        &context,
+        drop_base_check.stream_from,
+        effective_from_timestamp,
+    )
+    .await;
     tracing::info!("kafka synced");
 
     {
@@ -152,16 +194,14 @@ async fn parse_kafka_transactions(
     tracing::instrument(
         level = "info",
         skip(context),
-        fields(
-            stream_from = ?stream_from,
-            from_timestamp = context.config.parsing_from_timestamp.unwrap_or_default(),
-            buff_size = context.config.buff_size,
-            commit_time_secs = context.config.commit_time_secs,
-        )
+        fields(stream_from = ?stream_from, from_timestamp, buff_size = context.config.buff_size, commit_time_secs = context.config.commit_time_secs,)
     )
 )]
-async fn sync_kafka(context: &BufferContext, stream_from: StreamFrom) -> Offsets {
-    let from_timestamp = context.config.parsing_from_timestamp.unwrap_or_default() as i32;
+async fn sync_kafka(
+    context: &BufferContext,
+    stream_from: StreamFrom,
+    from_timestamp: u32,
+) -> Offsets {
     tracing::info!("prepare get kafka stream");
     let (mut stream_transactions, offsets) = context
         .config
@@ -176,8 +216,8 @@ async fn sync_kafka(context: &BufferContext, stream_from: StreamFrom) -> Offsets
     while let Some(produced_transaction) = stream_transactions.next().await {
         count += 1;
         let transaction: Transaction = produced_transaction.transaction.clone();
-        let transaction_time = transaction.now() as i32;
-        *context.timestamp_last_block.write().await = transaction_time;
+        let transaction_time = transaction.now();
+        *context.timestamp_last_block.write().await = transaction_time as i32;
 
         if transaction_time >= from_timestamp
             && buff_extracted_events(&transaction, &context.parser).is_some()
