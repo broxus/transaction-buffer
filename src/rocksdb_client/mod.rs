@@ -33,6 +33,19 @@ pub struct RocksdbClient {
     pub constants: RocksdbClientConstants,
 }
 
+impl Clone for RocksdbClient {
+    fn clone(&self) -> Self {
+        let inner = self.inner.clone();
+        Self {
+            transactions: inner.instantiate_table(),
+            transactions_index: inner.instantiate_table(),
+            drop_base_index: inner.instantiate_table(),
+            inner,
+            constants: self.constants.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DropBaseCheckResult {
     pub stream_from: StreamFrom,

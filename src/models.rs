@@ -44,6 +44,8 @@ pub struct ArchiveNodeConfig {
     pub endpoint: String,
     pub region: String,
     pub bucket: String,
+    pub max_parallel_workers: Option<usize>,
+    pub archive_batch_size: Option<usize>,
 }
 
 impl BufferedConsumerConfig {
