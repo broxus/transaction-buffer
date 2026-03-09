@@ -44,6 +44,7 @@ pub struct ArchiveNodeConfig {
     pub endpoint: String,
     pub region: String,
     pub bucket: String,
+    pub from_timestamp: Option<u32>,
     pub max_parallel_workers: Option<usize>,
     pub archive_batch_size: Option<usize>,
 }

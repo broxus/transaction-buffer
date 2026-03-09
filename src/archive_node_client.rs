@@ -112,6 +112,18 @@ struct ArchiveProcessResult {
     last_master_gen_utime: u32,
 }
 
+#[derive(Debug, Clone)]
+struct ArchiveProbeResult {
+    next_archive_id_hint: u32,
+    last_master_gen_utime: u32,
+}
+
+#[derive(Debug, Clone)]
+struct ArchiveProbePoint {
+    archive_id: u32,
+    probe: ArchiveProbeResult,
+}
+
 struct BatchWindowOutput {
     window_start: u32,
     window_end: u32,
@@ -131,6 +143,11 @@ struct ParallelArchiveConfig {
 
 const DEFAULT_ARCHIVE_BATCH_SIZE: usize = 1000;
 const WINDOW_DISCOVERY_CHUNK_SIZE: u32 = 32;
+const SEARCH_EXISTENCE_CHUNK_SIZE: u32 = 128;
+const SEARCH_FORWARD_LOOKAHEAD_IDS: u32 = 4096;
+const START_ARCHIVE_LOOKBACK_SECONDS: u32 = 24 * 60 * 60;
+const SEARCH_BRACKET_CONCURRENCY: usize = 4;
+const SEARCH_MIN_BRACKET_GAP: u32 = 1024;
 
 #[derive(Clone)]
 struct ArchiveS3Client {
@@ -153,6 +170,12 @@ struct ArchiveWriteOutcome {
     tx_count: usize,
     blocks_in_archive: usize,
     max_inserted_timestamp: Option<u32>,
+}
+
+struct SearchStats {
+    started_at: Instant,
+    probe_requests: u64,
+    cache_hits: u64,
 }
 
 impl SyncSummary {
@@ -227,7 +250,14 @@ pub async fn sync_from_genesis_until_day_ago(
     cfg: &ArchiveNodeConfig,
 ) -> Result<Option<u32>> {
     let cutoff_timestamp = now_minus_one_day_unix();
-    sync_from_s3_range(rocksdb_client, parser, cfg, 0, cutoff_timestamp).await
+    sync_from_s3_range(
+        rocksdb_client,
+        parser,
+        cfg,
+        cfg.from_timestamp.unwrap_or_default(),
+        cutoff_timestamp,
+    )
+    .await
 }
 
 #[tracing::instrument(
@@ -290,8 +320,17 @@ async fn sync_from_s3_range_parallel(
     let stop_requested = Arc::new(AtomicBool::new(false));
     let batch_size_u32 = u32::try_from(parallel_cfg.archive_batch_size)
         .context("archive_batch_size does not fit into u32")?;
-    let mut next_batch_start = 1u32;
+    let initial_archive_id =
+        resolve_start_archive_id(
+            &s3_client,
+            resolve_search_from_timestamp(cfg, from_timestamp),
+            "parallel",
+        )
+            .await?;
+    let initial_window_start = batch_window_start(initial_archive_id, batch_size_u32);
+    let mut next_batch_start = initial_window_start;
     let mut window_start_hints: HashMap<u32, u32> = HashMap::new();
+    window_start_hints.insert(initial_window_start, initial_archive_id);
     let mut workers = JoinSet::new();
 
     loop {
@@ -388,7 +427,13 @@ async fn sync_from_s3_range_prefetch_one(
     let s3_client = build_s3_client(cfg)?;
     let mut max_inserted_timestamp: Option<u32> = None;
     let mut summary = SyncSummary::new();
-    let mut current_archive_id = 1u32;
+    let mut current_archive_id =
+        resolve_start_archive_id(
+            &s3_client,
+            resolve_search_from_timestamp(cfg, from_timestamp),
+            "prefetch",
+        )
+            .await?;
     let mut current_archive_bytes = download_archive_bytes(&s3_client, current_archive_id).await?;
 
     loop {
@@ -579,7 +624,23 @@ async fn process_archive_batch_window(
             break;
         }
 
-        current_archive_id = Some(next_archive_id);
+        current_archive_id = find_first_existing_archive_id_in_range(
+            s3_client,
+            next_archive_id,
+            window_end,
+            WINDOW_DISCOVERY_CHUNK_SIZE,
+        )
+        .await?;
+
+        if current_archive_id != Some(next_archive_id) {
+            tracing::debug!(
+                window_start,
+                window_end,
+                expected_next_archive_id = next_archive_id,
+                resolved_next_archive_id = current_archive_id,
+                "archive batch worker skipped missing archive ids inside window"
+            );
+        }
     }
 
     Ok(BatchWindowOutput {
@@ -613,48 +674,13 @@ async fn find_first_existing_archive_id_in_window(
         }
     }
 
-    let mut chunk_start = window_start;
-    while chunk_start <= window_end {
-        if stop_requested.load(Ordering::SeqCst) {
-            return Ok(None);
-        }
-
-        let chunk_end = chunk_start
-            .saturating_add(WINDOW_DISCOVERY_CHUNK_SIZE.saturating_sub(1))
-            .min(window_end);
-        let mut checks = FuturesUnordered::new();
-
-        for archive_id in chunk_start..=chunk_end {
-            let s3_client = s3_client.clone();
-            checks.push(async move {
-                archive_exists(&s3_client, archive_id)
-                    .await
-                    .map(|exists| (archive_id, exists))
-            });
-        }
-
-        let mut first_existing_archive_id: Option<u32> = None;
-        while let Some(found) = checks.next().await {
-            let (archive_id, exists) = found?;
-            if exists {
-                first_existing_archive_id = Some(match first_existing_archive_id {
-                    Some(current) => current.min(archive_id),
-                    None => archive_id,
-                });
-            }
-        }
-
-        if first_existing_archive_id.is_some() {
-            return Ok(first_existing_archive_id);
-        }
-
-        chunk_start = match chunk_end.checked_add(1) {
-            Some(next) => next,
-            None => break,
-        };
-    }
-
-    Ok(None)
+    find_first_existing_archive_id_in_range(
+        s3_client,
+        window_start,
+        window_end,
+        WINDOW_DISCOVERY_CHUNK_SIZE,
+    )
+    .await
 }
 
 async fn archive_exists(s3_client: &ArchiveS3Client, archive_id: u32) -> Result<bool> {
@@ -679,6 +705,14 @@ async fn load_archive_process_result(
         to_timestamp,
     )
     .await
+}
+
+async fn load_archive_probe_result(
+    s3_client: &ArchiveS3Client,
+    archive_id: u32,
+) -> Result<ArchiveProbeResult> {
+    let archive_bytes = download_archive_bytes(s3_client, archive_id).await?;
+    parse_archive_probe_blocking(archive_bytes).await
 }
 
 async fn download_archive_bytes(s3_client: &ArchiveS3Client, archive_id: u32) -> Result<Vec<u8>> {
@@ -723,6 +757,12 @@ async fn parse_archive_payload_blocking(data: Vec<u8>) -> Result<ParsedArchive> 
     tokio::task::spawn_blocking(move || parse_archive_payload(&data))
         .await
         .context("archive header parse task join failed")?
+}
+
+async fn parse_archive_probe_blocking(data: Vec<u8>) -> Result<ArchiveProbeResult> {
+    tokio::task::spawn_blocking(move || parse_archive_probe(&data))
+        .await
+        .context("archive probe parse task join failed")?
 }
 
 async fn parse_transactions_from_archive_bytes_with_range_blocking(
@@ -851,6 +891,59 @@ fn parse_archive_payload(data: &[u8]) -> Result<ParsedArchive> {
     })
 }
 
+fn parse_archive_probe(data: &[u8]) -> Result<ArchiveProbeResult> {
+    let mut data = data;
+    read_archive_prefix(&mut data)?;
+
+    let mut last_master_seqno: Option<u32> = None;
+    let mut last_master_block_id: Option<BlockId> = None;
+    let mut last_master_block_data: Option<Vec<u8>> = None;
+
+    while data.len() >= 8 {
+        let header = <ArchiveEntryHeader as TlRead>::read_from(&mut data)
+            .map_err(|e| anyhow!("invalid archive entry header: {e:?}"))?;
+        let data_len = header.data_len as usize;
+        let block_id = header.block_id();
+
+        let Some((entry_data, tail)) = data.split_at_checked(data_len) else {
+            return Err(anyhow!("unexpected entry eof"));
+        };
+        data = tail;
+
+        if header.ty != ArchiveEntryType::Block || !block_id.is_masterchain() {
+            continue;
+        }
+
+        let should_replace = match last_master_seqno {
+            Some(current) => block_id.seqno >= current,
+            None => true,
+        };
+        if should_replace {
+            last_master_seqno = Some(block_id.seqno);
+            last_master_block_id = Some(block_id);
+            last_master_block_data = Some(entry_data.to_vec());
+        }
+    }
+
+    let last_master_seqno =
+        last_master_seqno.ok_or_else(|| anyhow!("archive does not contain masterchain block headers"))?;
+    let last_master_block_id =
+        last_master_block_id.ok_or_else(|| anyhow!("archive does not contain last masterchain block id"))?;
+    let last_master_block_data = last_master_block_data
+        .ok_or_else(|| anyhow!("archive does not contain last masterchain block data"))?;
+    let last_master_block = parse_checked_block(&last_master_block_id, &last_master_block_data)
+        .with_context(|| format!("failed to deserialize block {last_master_block_id}"))?;
+    let last_master_gen_utime = last_master_block
+        .load_info()
+        .with_context(|| format!("failed to load block info {last_master_block_id}"))?
+        .gen_utime;
+
+    Ok(ArchiveProbeResult {
+        next_archive_id_hint: last_master_seqno.saturating_add(1),
+        last_master_gen_utime,
+    })
+}
+
 fn read_archive_prefix(buf: &mut &[u8]) -> Result<()> {
     match buf.split_first_chunk() {
         Some((header, tail)) if header == &ARCHIVE_PREFIX => {
@@ -910,6 +1003,465 @@ fn now_minus_one_day_unix() -> u32 {
         .unwrap_or(Duration::ZERO)
         .as_secs();
     now.saturating_sub(24 * 60 * 60) as u32
+}
+
+fn resolve_search_from_timestamp(cfg: &ArchiveNodeConfig, from_timestamp: u32) -> u32 {
+    cfg.from_timestamp.unwrap_or(from_timestamp)
+}
+
+async fn resolve_start_archive_id(
+    s3_client: &ArchiveS3Client,
+    search_from_timestamp: u32,
+    mode: &'static str,
+) -> Result<u32> {
+    if search_from_timestamp == 0 {
+        tracing::info!(mode, "S3 start archive search skipped because timestamp is zero");
+        return Ok(1);
+    }
+
+    let search_anchor = search_from_timestamp.saturating_sub(START_ARCHIVE_LOOKBACK_SECONDS);
+    tracing::info!(
+        mode,
+        search_from_timestamp,
+        search_anchor,
+        "starting S3 archive search by timestamp"
+    );
+    let (start_point, stats) = find_archive_id_for_timestamp(s3_client, search_anchor).await?;
+    tracing::info!(
+        mode,
+        search_from_timestamp,
+        search_anchor,
+        start_archive_id = start_point.archive_id,
+        start_archive_timestamp = start_point.probe.last_master_gen_utime,
+        probe_requests = stats.probe_requests,
+        cache_hits = stats.cache_hits,
+        elapsed_ms = stats.started_at.elapsed().as_millis(),
+        "resolved initial archive id for S3 sync"
+    );
+    Ok(start_point.archive_id)
+}
+
+async fn find_archive_id_for_timestamp(
+    s3_client: &ArchiveS3Client,
+    target_timestamp: u32,
+) -> Result<(ArchiveProbePoint, SearchStats)> {
+    let mut stats = SearchStats {
+        started_at: Instant::now(),
+        probe_requests: 0,
+        cache_hits: 0,
+    };
+    let mut probe_cache = HashMap::new();
+    let mut low = probe_archive_at_or_after(s3_client, &mut probe_cache, &mut stats, 1)
+        .await?
+        .ok_or_else(|| anyhow!("S3 archive bucket is empty"))?;
+    tracing::info!(
+        archive_id = low.archive_id,
+        archive_timestamp = low.probe.last_master_gen_utime,
+        "S3 archive search initial probe completed"
+    );
+    if low.probe.last_master_gen_utime >= target_timestamp {
+        return Ok((low, stats));
+    }
+
+    let mut wave = 0u32;
+    let mut previous_low: Option<ArchiveProbePoint> = None;
+    let high = loop {
+        wave = wave.saturating_add(1);
+        let candidates =
+            build_bracketing_wave_candidates(&low, previous_low.as_ref(), target_timestamp);
+        tracing::info!(
+            wave,
+            ?candidates,
+            low_archive_id = low.archive_id,
+            low_archive_timestamp = low.probe.last_master_gen_utime,
+            "S3 archive search bracketing wave started"
+        );
+
+        let wave_started_at = Instant::now();
+        let mut points =
+            probe_candidates_at_or_after(s3_client, &mut probe_cache, &mut stats, &candidates)
+                .await?;
+        if points.is_empty() {
+            let fallback_candidates = build_fallback_bracketing_wave_candidates(&low);
+            tracing::info!(
+                wave,
+                ?fallback_candidates,
+                low_archive_id = low.archive_id,
+                low_archive_timestamp = low.probe.last_master_gen_utime,
+                "S3 archive search primary bracketing wave missed, retrying with fallback candidates"
+            );
+            points = probe_candidates_at_or_after(
+                s3_client,
+                &mut probe_cache,
+                &mut stats,
+                &fallback_candidates,
+            )
+            .await?;
+        }
+
+        if points.is_empty() {
+            tracing::info!(
+                wave,
+                low_archive_id = low.archive_id,
+                low_archive_timestamp = low.probe.last_master_gen_utime,
+                elapsed_ms = wave_started_at.elapsed().as_millis(),
+                "S3 archive search reached bucket tail before target timestamp"
+            );
+            return Ok((low, stats));
+        }
+
+        let mut wave_low = low.clone();
+        let mut wave_high = None;
+        for point in points {
+            if point.probe.last_master_gen_utime < target_timestamp {
+                if point.archive_id > wave_low.archive_id {
+                    wave_low = point;
+                }
+            } else if wave_high
+                .as_ref()
+                .map(|current: &ArchiveProbePoint| point.archive_id < current.archive_id)
+                .unwrap_or(true)
+            {
+                wave_high = Some(point);
+            }
+        }
+
+        tracing::info!(
+            wave,
+            low_archive_id = wave_low.archive_id,
+            low_archive_timestamp = wave_low.probe.last_master_gen_utime,
+            high_archive_id = wave_high.as_ref().map(|point| point.archive_id),
+            high_archive_timestamp = wave_high
+                .as_ref()
+                .map(|point| point.probe.last_master_gen_utime),
+            elapsed_ms = wave_started_at.elapsed().as_millis(),
+            "S3 archive search bracketing wave completed"
+        );
+
+        if let Some(high) = wave_high {
+            low = wave_low;
+            break high;
+        }
+
+        anyhow::ensure!(
+            wave_low.archive_id > low.archive_id,
+            "archive timestamp search wave did not advance"
+        );
+        previous_low = Some(low.clone());
+        low = wave_low;
+    };
+
+    let mut best_below = low.clone();
+    let mut low_bound = low
+        .probe
+        .next_archive_id_hint
+        .max(low.archive_id.saturating_add(1));
+    let mut high_bound = high.archive_id.saturating_sub(1);
+    let mut high = high;
+    let mut step = 0u32;
+
+    while low_bound <= high_bound {
+        step = step.saturating_add(1);
+        let estimated_id =
+            estimate_search_candidate(&low, &high, low_bound, high_bound, target_timestamp);
+        let step_started_at = Instant::now();
+        let Some(point) =
+            probe_archive_at_or_after(s3_client, &mut probe_cache, &mut stats, estimated_id)
+                .await?
+        else {
+            tracing::info!(
+                step,
+                low_archive_id = low.archive_id,
+                low_archive_timestamp = low.probe.last_master_gen_utime,
+                high_archive_id = high.archive_id,
+                high_archive_timestamp = high.probe.last_master_gen_utime,
+                estimated_id,
+                "S3 archive search refinement stopped because no archive exists after candidate"
+            );
+            break;
+        };
+
+        if point.archive_id > high_bound {
+            tracing::info!(
+                step,
+                low_archive_id = low.archive_id,
+                low_archive_timestamp = low.probe.last_master_gen_utime,
+                high_archive_id = high.archive_id,
+                high_archive_timestamp = high.probe.last_master_gen_utime,
+                estimated_id,
+                resolved_archive_id = point.archive_id,
+                elapsed_ms = step_started_at.elapsed().as_millis(),
+                "S3 archive search step skipped because resolved archive is outside high bound"
+            );
+            high_bound = estimated_id.saturating_sub(1);
+            continue;
+        }
+
+        tracing::info!(
+            step,
+            low_archive_id = low.archive_id,
+            low_archive_timestamp = low.probe.last_master_gen_utime,
+            high_archive_id = high.archive_id,
+            high_archive_timestamp = high.probe.last_master_gen_utime,
+            estimated_id,
+            resolved_archive_id = point.archive_id,
+            resolved_archive_timestamp = point.probe.last_master_gen_utime,
+            elapsed_ms = step_started_at.elapsed().as_millis(),
+            "S3 archive search refinement step completed"
+        );
+
+        if point.probe.last_master_gen_utime < target_timestamp {
+            best_below = point.clone();
+            low_bound = point
+                .probe
+                .next_archive_id_hint
+                .max(point.archive_id.saturating_add(1));
+            low = point;
+        } else {
+            high = point.clone();
+            high_bound = point.archive_id.saturating_sub(1);
+        }
+    }
+
+    Ok((best_below, stats))
+}
+
+async fn probe_archive_at_or_after(
+    s3_client: &ArchiveS3Client,
+    probe_cache: &mut HashMap<u32, ArchiveProbeResult>,
+    stats: &mut SearchStats,
+    start_archive_id: u32,
+) -> Result<Option<ArchiveProbePoint>> {
+    let Some(archive_id) =
+        find_first_existing_archive_id_at_or_after(s3_client, start_archive_id, SEARCH_EXISTENCE_CHUNK_SIZE)
+            .await?
+    else {
+        return Ok(None);
+    };
+
+    if let Some(probe) = probe_cache.get(&archive_id).cloned() {
+        stats.cache_hits = stats.cache_hits.saturating_add(1);
+        return Ok(Some(ArchiveProbePoint { archive_id, probe }));
+    }
+
+    stats.probe_requests = stats.probe_requests.saturating_add(1);
+    let probe = load_archive_probe_result(s3_client, archive_id)
+        .await
+        .with_context(|| format!("failed to probe archive {}", archive_id))?;
+    probe_cache.insert(archive_id, probe.clone());
+    Ok(Some(ArchiveProbePoint { archive_id, probe }))
+}
+
+async fn find_first_existing_archive_id_at_or_after(
+    s3_client: &ArchiveS3Client,
+    start_archive_id: u32,
+    chunk_size: u32,
+) -> Result<Option<u32>> {
+    let range_end = start_archive_id
+        .saturating_add(SEARCH_FORWARD_LOOKAHEAD_IDS.saturating_sub(1));
+    find_first_existing_archive_id_in_range(s3_client, start_archive_id, range_end, chunk_size).await
+}
+
+async fn find_first_existing_archive_id_in_range(
+    s3_client: &ArchiveS3Client,
+    range_start: u32,
+    range_end: u32,
+    chunk_size: u32,
+) -> Result<Option<u32>> {
+    let mut chunk_start = range_start;
+    while chunk_start <= range_end {
+        let chunk_end = chunk_start
+            .saturating_add(chunk_size.saturating_sub(1))
+            .min(range_end);
+        let mut checks = FuturesUnordered::new();
+
+        for archive_id in chunk_start..=chunk_end {
+            let s3_client = s3_client.clone();
+            checks.push(async move {
+                archive_exists(&s3_client, archive_id)
+                    .await
+                    .map(|exists| (archive_id, exists))
+            });
+        }
+
+        let mut first_existing_archive_id: Option<u32> = None;
+        while let Some(found) = checks.next().await {
+            let (archive_id, exists) = found?;
+            if exists {
+                first_existing_archive_id = Some(match first_existing_archive_id {
+                    Some(current) => current.min(archive_id),
+                    None => archive_id,
+                });
+            }
+        }
+
+        if first_existing_archive_id.is_some() {
+            return Ok(first_existing_archive_id);
+        }
+
+        if chunk_end == range_end || chunk_end == u32::MAX {
+            break;
+        }
+        chunk_start = chunk_end + 1;
+    }
+
+    Ok(None)
+}
+
+fn build_bracketing_wave_candidates(
+    low: &ArchiveProbePoint,
+    previous_low: Option<&ArchiveProbePoint>,
+    target_timestamp: u32,
+) -> Vec<u32> {
+    let start = low.probe.next_archive_id_hint.max(low.archive_id.saturating_add(1));
+    let mut gap = start.saturating_sub(low.archive_id).max(SEARCH_MIN_BRACKET_GAP);
+
+    if let Some(previous_low) = previous_low {
+        let low_ts = low.probe.last_master_gen_utime;
+        let prev_ts = previous_low.probe.last_master_gen_utime;
+        if low_ts > prev_ts && low.archive_id > previous_low.archive_id && target_timestamp > low_ts {
+            let remaining_ts = u64::from(target_timestamp.saturating_sub(low_ts));
+            let id_delta = u64::from(low.archive_id.saturating_sub(previous_low.archive_id));
+            let ts_delta = u64::from(low_ts.saturating_sub(prev_ts));
+            let estimated_gap = remaining_ts
+                .saturating_mul(id_delta)
+                .checked_div(ts_delta)
+                .unwrap_or_default();
+            if estimated_gap > 0 {
+                gap = (estimated_gap / SEARCH_BRACKET_CONCURRENCY as u64)
+                    .max(u64::from(gap))
+                    .min(u64::from(u32::MAX)) as u32;
+            }
+        }
+    }
+
+    let mut candidates = Vec::with_capacity(SEARCH_BRACKET_CONCURRENCY);
+    let mut candidate = start;
+    for _ in 0..SEARCH_BRACKET_CONCURRENCY {
+        if candidates.last().copied() == Some(candidate) {
+            break;
+        }
+        candidates.push(candidate);
+        let next_gap = gap.max(SEARCH_MIN_BRACKET_GAP);
+        candidate = candidate.saturating_add(next_gap);
+    }
+    candidates
+}
+
+fn build_fallback_bracketing_wave_candidates(low: &ArchiveProbePoint) -> Vec<u32> {
+    let start = low.probe.next_archive_id_hint.max(low.archive_id.saturating_add(1));
+    let mut candidates = Vec::with_capacity(SEARCH_BRACKET_CONCURRENCY);
+    let mut gap = start
+        .saturating_sub(low.archive_id)
+        .max(SEARCH_MIN_BRACKET_GAP);
+    let mut candidate = start;
+
+    for _ in 0..SEARCH_BRACKET_CONCURRENCY {
+        if candidates.last().copied() == Some(candidate) {
+            break;
+        }
+        candidates.push(candidate);
+        candidate = candidate.saturating_add(gap);
+        gap = gap.saturating_mul(2).max(SEARCH_MIN_BRACKET_GAP);
+    }
+
+    candidates
+}
+
+async fn probe_candidates_at_or_after(
+    s3_client: &ArchiveS3Client,
+    probe_cache: &mut HashMap<u32, ArchiveProbeResult>,
+    stats: &mut SearchStats,
+    candidates: &[u32],
+) -> Result<Vec<ArchiveProbePoint>> {
+    let mut resolution_tasks = FuturesUnordered::new();
+    for &candidate in candidates {
+        let s3_client = s3_client.clone();
+        resolution_tasks.push(async move {
+            let archive_id = find_first_existing_archive_id_at_or_after(
+                &s3_client,
+                candidate,
+                SEARCH_EXISTENCE_CHUNK_SIZE,
+            )
+            .await?;
+            Ok::<_, anyhow::Error>(archive_id)
+        });
+    }
+
+    let mut archive_ids = Vec::new();
+    while let Some(result) = resolution_tasks.next().await {
+        if let Some(archive_id) = result? {
+            archive_ids.push(archive_id);
+        }
+    }
+    archive_ids.sort_unstable();
+    archive_ids.dedup();
+
+    let mut probe_tasks = FuturesUnordered::new();
+    for &archive_id in &archive_ids {
+        if probe_cache.contains_key(&archive_id) {
+            stats.cache_hits = stats.cache_hits.saturating_add(1);
+            continue;
+        }
+
+        let s3_client = s3_client.clone();
+        probe_tasks.push(async move {
+            let probe = load_archive_probe_result(&s3_client, archive_id)
+                .await
+                .with_context(|| format!("failed to probe archive {}", archive_id))?;
+            Ok::<_, anyhow::Error>((archive_id, probe))
+        });
+    }
+
+    while let Some(result) = probe_tasks.next().await {
+        let (archive_id, probe) = result?;
+        stats.probe_requests = stats.probe_requests.saturating_add(1);
+        probe_cache.insert(archive_id, probe);
+    }
+
+    Ok(archive_ids
+        .into_iter()
+        .filter_map(|archive_id| {
+            probe_cache
+                .get(&archive_id)
+                .cloned()
+                .map(|probe| ArchiveProbePoint { archive_id, probe })
+        })
+        .collect())
+}
+
+fn estimate_search_candidate(
+    low: &ArchiveProbePoint,
+    high: &ArchiveProbePoint,
+    low_bound: u32,
+    high_bound: u32,
+    target_timestamp: u32,
+) -> u32 {
+    if low_bound >= high_bound {
+        return low_bound;
+    }
+
+    let low_ts = low.probe.last_master_gen_utime;
+    let high_ts = high.probe.last_master_gen_utime;
+    if high_ts <= low_ts || target_timestamp <= low_ts || target_timestamp >= high_ts {
+        return low_bound + (high_bound - low_bound) / 2;
+    }
+
+    let id_span = u64::from(high.archive_id.saturating_sub(low.archive_id));
+    let ts_span = u64::from(high_ts.saturating_sub(low_ts));
+    if id_span == 0 || ts_span == 0 {
+        return low_bound + (high_bound - low_bound) / 2;
+    }
+
+    let ts_offset = u64::from(target_timestamp.saturating_sub(low_ts));
+    let estimated_offset = ts_offset.saturating_mul(id_span) / ts_span;
+    let estimated_id = low.archive_id.saturating_add(estimated_offset as u32);
+    estimated_id.clamp(low_bound, high_bound)
+}
+
+fn batch_window_start(archive_id: u32, batch_size: u32) -> u32 {
+    let zero_based = archive_id.saturating_sub(1);
+    zero_based - (zero_based % batch_size) + 1
 }
 
 fn batch_window_end(window_start: u32, batch_size: u32) -> u32 {
