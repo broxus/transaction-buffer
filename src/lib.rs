@@ -1,5 +1,6 @@
 mod cache;
 pub mod drop_base;
+pub mod metrics_utils;
 pub mod models;
 mod sqlx_client;
 
@@ -187,23 +188,37 @@ async fn parse_kafka_transactions(
 
     let mut count = 0;
     let mut raw_transactions = vec![];
+    let mut failed_transactions_count = 0_u64;
     while let Some(produced_transaction) = stream_transactions.next().await {
         count += 1;
         let transaction: Transaction = produced_transaction.transaction.clone();
         let transaction_time = transaction.now() as i64;
         *timestamp_last_block.write().await = transaction_time as i32;
 
-        if buff_extracted_events(&transaction, &parser).is_some()
-            || check_failed_transactions(&config, &transaction)
-        {
+        metrics_utils::increment_raw_transactions_received_count(1);
+        metrics_utils::record_raw_transaction_received_timestamp(transaction_time);
+
+        let has_extractable_items = buff_extracted_events(&transaction, &parser).is_some();
+        let is_failed_transaction = check_failed_transactions(&config, &transaction);
+
+        if has_extractable_items || is_failed_transaction {
             raw_transactions.push(transaction.into());
+            failed_transactions_count += is_failed_transaction as u64;
         }
 
         if count >= config.buff_size || *time.read().await >= config.commit_time_secs {
             if !raw_transactions.is_empty() {
+                let buffered_count = raw_transactions.len() as u64;
+
                 insert_raw_transactions(&mut raw_transactions, &config.pg_pool)
                     .await
                     .expect("cant insert raw_transactions: rip db");
+
+                metrics_utils::increment_raw_transactions_buffered_count(buffered_count);
+                metrics_utils::increment_failed_transactions_buffered_count(
+                    failed_transactions_count,
+                );
+                failed_transactions_count = 0;
             }
 
             if let Err(e) = produced_transaction
@@ -225,9 +240,14 @@ async fn parse_kafka_transactions(
     }
 
     if !raw_transactions.is_empty() {
+        let buffered_count = raw_transactions.len() as u64;
+
         insert_raw_transactions(&mut raw_transactions, &config.pg_pool)
             .await
             .expect("cant insert raw_transaction: rip db");
+
+        metrics_utils::increment_raw_transactions_buffered_count(buffered_count);
+        metrics_utils::increment_failed_transactions_buffered_count(failed_transactions_count);
     }
 
     log::info!("kafka synced");
@@ -264,13 +284,22 @@ async fn parse_kafka_transactions(
         let transaction: Transaction = produced_transaction.transaction.clone();
         let transaction_timestamp = transaction.now;
 
-        if buff_extracted_events(&transaction, &parser).is_some()
-            || check_failed_transactions(&config, &transaction)
-        {
+        metrics_utils::increment_raw_transactions_received_count(1);
+        metrics_utils::record_raw_transaction_received_timestamp(transaction_timestamp as i64);
+
+        let has_extractable_items = buff_extracted_events(&transaction, &parser).is_some();
+        let is_failed_transaction = check_failed_transactions(&config, &transaction);
+
+        if has_extractable_items || is_failed_transaction {
             insert_raw_transaction(transaction.clone().into(), &config.pg_pool)
                 .await
                 .expect("cant insert raw_transaction to db");
             raw_cache.insert_raw(transaction.into()).await;
+
+            metrics_utils::increment_raw_transactions_buffered_count(1);
+            if is_failed_transaction {
+                metrics_utils::increment_failed_transactions_buffered_count(1);
+            }
         };
 
         *timestamp_last_block.write().await = transaction_timestamp as i32;
@@ -355,11 +384,17 @@ async fn parse_raw_transaction(
 
             let raw_transaction = RawTransaction::from(raw_transaction_from_db);
 
+            metrics_utils::record_raw_transaction_buffered_timestamp(
+                raw_transaction.data.now as i64,
+            );
+
             if let Some(events) = buff_extracted_events(&raw_transaction.data, &parser) {
+                metrics_utils::increment_extracted_items_count(events.len() as u64);
                 send_message.push((events, raw_transaction.clone()));
             } else if send_failed_transactions {
                 if let Some(exit_code) = get_exit_code(&raw_transaction.data) {
                     if exit_code > 0 {
+                        metrics_utils::increment_failed_transactions_parsed_count(1);
                         send_message.push((vec![], raw_transaction));
                     }
                 }
@@ -398,11 +433,17 @@ async fn parse_raw_transaction(
 
         let mut send_message = vec![];
         for raw_transaction in raw_transactions {
+            metrics_utils::record_raw_transaction_buffered_timestamp(
+                raw_transaction.data.now as i64,
+            );
+
             if let Some(events) = buff_extracted_events(&raw_transaction.data, &parser) {
+                metrics_utils::increment_extracted_items_count(events.len() as u64);
                 send_message.push((events, raw_transaction));
             } else if send_failed_transactions {
                 if let Some(exit_code) = get_exit_code(&raw_transaction.data) {
                     if exit_code > 0 {
+                        metrics_utils::increment_failed_transactions_parsed_count(1);
                         send_message.push((vec![], raw_transaction));
                     }
                 }
@@ -441,11 +482,20 @@ pub fn buff_extracted_events(
     data: &Transaction,
     parser: &TransactionParser,
 ) -> Option<Vec<ExtractedOwned>> {
-    if let Ok(extracted) = parser.parse(data) {
-        if !extracted.is_empty() {
-            return filter_extracted(extracted, data.clone());
+    match parser.parse(data) {
+        Ok(extracted) => {
+            metrics_utils::increment_raw_transactions_parsed_count(1);
+            metrics_utils::record_raw_transaction_parsed_timestamp(data.now as i64);
+
+            if !extracted.is_empty() {
+                return filter_extracted(extracted, data.clone());
+            }
+        }
+        Err(_) => {
+            metrics_utils::increment_raw_transactions_parse_error_count(1);
         }
     }
+
     None
 }
 
