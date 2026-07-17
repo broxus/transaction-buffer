@@ -19,11 +19,10 @@ chrono = { version = "*" }
 ton_types = { git = "https://github.com/broxus/ton-labs-types" }
 ton_block = { git = "https://github.com/broxus/ton-labs-block.git" }
 futures = { version = "0.3" }
-sqlx = { version = "0.6.2", features = [
+sqlx = { version = "0.8.6", features = [
     "runtime-tokio-native-tls",
     "postgres",
     "uuid",
-    "offline",
     "chrono",
     "json",
 ] }
