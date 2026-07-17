@@ -29,7 +29,7 @@ pub struct RocksdbClient {
     pub transactions: Table<tables::Transactions>,
     pub transactions_index: Table<tables::TransactionsIndex>,
     pub drop_base_index: Table<tables::DropBaseIndex>,
-    pub inner: WeeDb,
+    pub inner: WeeDb<tables::TransactionTables>,
     pub constants: RocksdbClientConstants,
 }
 
@@ -37,9 +37,9 @@ impl Clone for RocksdbClient {
     fn clone(&self) -> Self {
         let inner = self.inner.clone();
         Self {
-            transactions: inner.instantiate_table(),
-            transactions_index: inner.instantiate_table(),
-            drop_base_index: inner.instantiate_table(),
+            transactions: inner.raw().instantiate_table(),
+            transactions_index: inner.raw().instantiate_table(),
+            drop_base_index: inner.raw().instantiate_table(),
             inner,
             constants: self.constants.clone(),
         }
@@ -80,8 +80,8 @@ impl RocksdbClient {
 
         let caches = Caches::with_capacity(caches_capacity);
 
-        let inner = WeeDb::builder(&config.persistent_db_path, caches)
-            .options(|opts, _| {
+        let inner = WeeDb::<tables::TransactionTables>::builder(&config.persistent_db_path, caches)
+            .with_options(|opts, _| {
                 opts.set_level_compaction_dynamic_level_bytes(true);
 
                 // compression opts
@@ -119,9 +119,6 @@ impl RocksdbClient {
                 // opts.enable_statistics();
                 // opts.set_stats_dump_period_sec(30);
             })
-            .with_table::<tables::Transactions>()
-            .with_table::<tables::TransactionsIndex>()
-            .with_table::<tables::DropBaseIndex>()
             .build()
             .context("Failed building db")?;
 
@@ -130,9 +127,9 @@ impl RocksdbClient {
             .apply(migrations)
             .context("Failed to apply migrations")?;
 
-        let transactions: Table<tables::Transactions> = inner.instantiate_table();
-        let transactions_index: Table<tables::TransactionsIndex> = inner.instantiate_table();
-        let drop_base_index: Table<tables::DropBaseIndex> = inner.instantiate_table();
+        let transactions = inner.raw().instantiate_table();
+        let transactions_index = inner.raw().instantiate_table();
+        let drop_base_index = inner.raw().instantiate_table();
 
         Ok(Self {
             transactions,
@@ -173,7 +170,7 @@ impl RocksdbClient {
             batch.put_cf(&self.transactions_index.cf(), key_index, []);
 
             self.inner
-                .raw()
+                .rocksdb()
                 .write(batch)
                 .expect("cant insert transaction: rocksdb is dead");
         }
@@ -195,7 +192,7 @@ impl RocksdbClient {
         batch.put_cf(&self.transactions.cf(), key, value);
 
         self.inner
-            .raw()
+            .rocksdb()
             .write(batch)
             .expect("cant update transaction: rocksdb is dead");
     }
@@ -219,7 +216,7 @@ impl RocksdbClient {
         batch.delete_range_cf(&self.transactions.cf(), from_key, [u8::MAX; 1 + 4 + 8 + 32]);
 
         self.inner
-            .raw()
+            .rocksdb()
             .write(batch)
             .expect("update_processed_transactions_to_unprocessed ERROR: cant update transactions: rocksdb is dead");
     }
@@ -338,12 +335,12 @@ impl RocksdbClient {
                 );
 
                 self.inner
-                    .raw()
+                    .rocksdb()
                     .write(batch)
                     .expect("cant delete range: rocksdb is dead");
 
                 self.inner
-                    .raw()
+                    .rocksdb()
                     .put_cf(&self.drop_base_index.cf(), key, [])
                     .expect("cant put drop_base_index: rocksdb is dead");
 
@@ -415,6 +412,6 @@ impl RocksdbClient {
 
 impl Drop for RocksdbClient {
     fn drop(&mut self) {
-        self.inner.raw().cancel_all_background_work(true);
+        self.inner.rocksdb().cancel_all_background_work(true);
     }
 }

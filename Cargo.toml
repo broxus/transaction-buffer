@@ -29,7 +29,7 @@ sqlx = { version = "0.6.2", features = [
 ] }
 nekoton-abi = { git = "https://github.com/broxus/nekoton.git" }
 ton_abi = { git = "https://github.com/broxus/ton-labs-abi.git" }
-weedb = "0.1.1"
+weedb = "0.6.0"
 fdlimit = "0.2.1"
 rlimit = "0.9.1"
 base64 = "0.13.0"

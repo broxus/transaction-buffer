@@ -1,5 +1,5 @@
 use weedb::rocksdb::{BlockBasedOptions, DBCompressionType, Options};
-use weedb::{Caches, ColumnFamily};
+use weedb::{Caches, ColumnFamily, ColumnFamilyOptions};
 
 /// - Key: `timestamp: u32, timestamp_lt: u64, processed: bool`
 /// - Value: transaction: bytes`
@@ -11,8 +11,10 @@ impl Transactions {
 
 impl ColumnFamily for Transactions {
     const NAME: &'static str = "transactions";
+}
 
-    fn options(opts: &mut Options, caches: &Caches) {
+impl ColumnFamilyOptions<Caches> for Transactions {
+    fn options(opts: &mut Options, caches: &mut Caches) {
         default_block_based_table_factory(opts, caches);
     }
 }
@@ -25,8 +27,10 @@ impl TransactionsIndex {
 
 impl ColumnFamily for TransactionsIndex {
     const NAME: &'static str = "transactions_index";
+}
 
-    fn options(opts: &mut Options, caches: &Caches) {
+impl ColumnFamilyOptions<Caches> for TransactionsIndex {
+    fn options(opts: &mut Options, caches: &mut Caches) {
         default_block_based_table_factory(opts, caches);
     }
 }
@@ -39,9 +43,19 @@ impl DropBaseIndex {
 
 impl ColumnFamily for DropBaseIndex {
     const NAME: &'static str = "drop_base_index";
+}
 
-    fn options(opts: &mut Options, caches: &Caches) {
+impl ColumnFamilyOptions<Caches> for DropBaseIndex {
+    fn options(opts: &mut Options, caches: &mut Caches) {
         default_block_based_table_factory(opts, caches);
+    }
+}
+
+weedb::tables! {
+    pub struct TransactionTables<Caches> {
+        pub transactions: Transactions,
+        pub transactions_index: TransactionsIndex,
+        pub drop_base_index: DropBaseIndex,
     }
 }
 
