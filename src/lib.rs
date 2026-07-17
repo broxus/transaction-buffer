@@ -206,7 +206,7 @@ async fn sync_kafka(
     let (mut stream_transactions, offsets) = context
         .config
         .transaction_consumer
-        .stream_until_highest_offsets(stream_from)
+        .stream_until_highest_offsets_with_manual_commit(stream_from)
         .await
         .expect("cant get highest offsets stream transactions");
     tracing::info!("kafka stream is ready");
@@ -231,9 +231,12 @@ async fn sync_kafka(
             context
                 .rocksdb
                 .insert_transactions_with_drain(&mut transactions);
-            if let Err(e) = produced_transaction.commit() {
-                tracing::error!(error = ?e, "can't commit kafka, stream is down");
-                panic!("cant commit kafka, stream is down. ERROR {}", e)
+            if let Err(e) = produced_transaction
+                .message
+                .store_offset(&context.config.transaction_consumer.topic)
+            {
+                tracing::error!(error = ?e, "can't store Kafka offset, stream is down");
+                panic!("can't store Kafka offset, stream is down. ERROR {e}")
             }
 
             tracing::info!(
