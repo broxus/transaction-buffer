@@ -30,7 +30,7 @@ mod test {
 
     #[tokio::test]
     async fn test_drop_base() {
-        let pg_pool = PgPool::connect("postgresql://postgres:postgres@localhost:5432/test_base")
+        let pg_pool = PgPool::connect("postgresql://postgres:123@localhost:5432/test_base")
             .await
             .unwrap();
         check_base(&pg_pool, 3).await;

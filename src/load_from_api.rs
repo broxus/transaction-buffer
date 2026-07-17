@@ -67,13 +67,15 @@ mod test {
     use std::sync::Arc;
 
     use crate::models::RocksdbClientConstants;
-    use crate::utils::create_rocksdb;
+    use crate::utils::{create_rocksdb, temporary_rocksdb_path};
 
     #[tokio::test]
+    #[ignore = "need real URL and API key"]
     async fn test_load_from_api() {
         println!("test_load_from_api");
+        let rocksdb_path = temporary_rocksdb_path();
         let rocksdb = Arc::new(create_rocksdb(
-            "./raw_transactions",
+            rocksdb_path.to_str().expect("temporary path is not UTF-8"),
             RocksdbClientConstants {
                 drop_base_index: 0,
                 from_timestamp: 0,
@@ -88,6 +90,6 @@ mod test {
             .unwrap();
         println!("{}", rocksdb.count_not_processed_transactions().0);
         drop(rocksdb);
-        std::fs::remove_dir_all("./raw_transactions").unwrap();
+        std::fs::remove_dir_all(rocksdb_path).unwrap();
     }
 }

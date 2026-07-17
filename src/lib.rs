@@ -425,7 +425,7 @@ async fn commit_transactions(
 #[cfg(test)]
 mod test {
     use crate::models::RocksdbClientConstants;
-    use crate::utils::create_rocksdb;
+    use crate::utils::{create_rocksdb, temporary_rocksdb_path};
     use chrono::Utc;
     use std::sync::Arc;
     use ton_block::{Deserializable, Transaction};
@@ -535,9 +535,10 @@ mod test {
     #[tokio::test]
     async fn test_count_last_key_logic() {
         let mut transactions = get_test_transactions();
+        let rocksdb_path = temporary_rocksdb_path();
 
         let rocksdb = Arc::new(create_rocksdb(
-            "./raw_transactions",
+            rocksdb_path.to_str().expect("temporary path is not UTF-8"),
             RocksdbClientConstants {
                 drop_base_index: 0,
                 from_timestamp: 0,
@@ -565,16 +566,17 @@ mod test {
         }
 
         drop(rocksdb);
-        std::fs::remove_dir_all("./raw_transactions").unwrap();
+        std::fs::remove_dir_all(rocksdb_path).unwrap();
         assert_eq!(iter_count, count);
     }
 
     #[tokio::test]
     async fn local_test() {
         let mut transactions = get_test_transactions();
+        let rocksdb_path = temporary_rocksdb_path();
 
         let rocksdb = Arc::new(create_rocksdb(
-            "./raw_transactions",
+            rocksdb_path.to_str().expect("temporary path is not UTF-8"),
             RocksdbClientConstants {
                 drop_base_index: 0,
                 from_timestamp: 0,
@@ -630,15 +632,16 @@ mod test {
         println!("sorted and empty");
 
         drop(rocksdb);
-        std::fs::remove_dir_all("./raw_transactions").unwrap();
+        std::fs::remove_dir_all(rocksdb_path).unwrap();
     }
 
     #[test]
     fn test_update_transactions() {
         let mut transactions = get_test_transactions();
         let from_timestamp = 1633727484;
+        let rocksdb_path = temporary_rocksdb_path();
         let rocksdb = Arc::new(create_rocksdb(
-            "./raw_transactions",
+            rocksdb_path.to_str().expect("temporary path is not UTF-8"),
             RocksdbClientConstants {
                 drop_base_index: 0,
                 from_timestamp,
@@ -672,6 +675,6 @@ mod test {
         }
 
         drop(rocksdb);
-        std::fs::remove_dir_all("./raw_transactions").unwrap();
+        std::fs::remove_dir_all(rocksdb_path).unwrap();
     }
 }

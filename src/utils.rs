@@ -132,3 +132,16 @@ pub fn create_rocksdb(rocksdb_path: &str, constants: RocksdbClientConstants) -> 
 
     RocksdbClient::new(&config).expect("cant create rocksdb")
 }
+
+#[cfg(test)]
+pub(crate) fn temporary_rocksdb_path() -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+
+    std::env::temp_dir().join(format!(
+        "transaction-buffer-test-{}-{}",
+        std::process::id(),
+        NEXT_ID.fetch_add(1, Ordering::Relaxed),
+    ))
+}
